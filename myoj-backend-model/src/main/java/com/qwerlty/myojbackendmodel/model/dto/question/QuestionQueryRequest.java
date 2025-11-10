@@ -22,6 +22,10 @@ public class QuestionQueryRequest extends PageRequest implements Serializable {
      * id
      */
     private Long id;
+    /**
+     * 难度
+     */
+    private Integer difficulty;
 
     /**
      * 标题
@@ -34,7 +38,7 @@ public class QuestionQueryRequest extends PageRequest implements Serializable {
     private String content;
 
     /**
-     * 标签列表
+     * 标签列表（json 数组）
      */
     private List<String> tags;
 
@@ -47,6 +51,9 @@ public class QuestionQueryRequest extends PageRequest implements Serializable {
      * 创建用户 id
      */
     private Long userId;
+
+
+
 
     private static final long serialVersionUID = 1L;
 }

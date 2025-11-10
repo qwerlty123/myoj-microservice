@@ -9,21 +9,31 @@ import com.qwerlty.myojbackendcommon.common.ResultUtils;
 import com.qwerlty.myojbackendcommon.constant.UserConstant;
 import com.qwerlty.myojbackendcommon.exception.BusinessException;
 import com.qwerlty.myojbackendcommon.exception.ThrowUtils;
+import com.qwerlty.myojbackendcommon.utils.JwtUtils;
+import com.qwerlty.myojbackendmodel.model.dto.questionsubmit.QuestionSubmitQueryDTO;
 import com.qwerlty.myojbackendmodel.model.dto.user.*;
+import com.qwerlty.myojbackendmodel.model.entity.Question;
 import com.qwerlty.myojbackendmodel.model.entity.User;
-import com.qwerlty.myojbackendmodel.model.vo.LoginUserVO;
-import com.qwerlty.myojbackendmodel.model.vo.UserVO;
+import com.qwerlty.myojbackendmodel.model.vo.*;
+import com.qwerlty.myojbackendserviceclient.client.QuestionFeignClient;
+import com.qwerlty.myojbackenduserservice.config.MinioConfiguration;
 import com.qwerlty.myojbackenduserservice.service.UserService;
-import com.qwerlty.myojbackenduserservice.service.impl.UserServiceImpl;
+import io.jsonwebtoken.Claims;
+import io.minio.MinioClient;
+import io.minio.PutObjectArgs;
+import io.minio.RemoveObjectArgs;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.BeanUtils;
-import org.springframework.util.DigestUtils;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * 用户接口
@@ -38,10 +48,76 @@ public class UserController {
 
     @Resource
     private UserService userService;
+    @Resource
+    private QuestionFeignClient questionFeignClient;
 
+    @Resource
+    private MinioClient minioClient;
 
+    @Resource
+    private MinioConfiguration minioConfiguration;
+
+    @PostMapping("/upload/avatar")
+    public BaseResponse<String> uploadAvatar(@RequestParam("file") MultipartFile file, @RequestParam("userId") Long userId) {
+        try {
+            // 校验文件类型
+            String contentType = file.getContentType();
+            if (contentType != null && !contentType.startsWith("image/")) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "只能上传图片文件");
+            }
+
+            // 校验文件大小（例如最大 2MB）
+            long maxSize = 2 * 1024 * 1024;
+            if (file.getSize() > maxSize) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "文件大小不能超过 2MB");
+            }
+
+            // 生成文件名：userId_timestamp.extension
+            String extension = getFileExtension(file.getOriginalFilename());
+            String fileName = String.format("avatar/%s_%s%s", userId, System.currentTimeMillis(), ".jpg");
+
+            // 上传到 MinIO
+            minioClient.putObject(
+                    PutObjectArgs.builder()
+                            .bucket(minioConfiguration.getBucket())  // MinIO bucket 名称
+                            .object(fileName)       // 文件名
+                            .stream(file.getInputStream(), file.getSize(), -1)
+                            .contentType(contentType)
+                            .build()
+            );
+            // 获取文件访问URL
+            String avatarUrl = String.format("%s/%s/%s",minioConfiguration.getEndpoint(),minioConfiguration.getBucket(),fileName);
+            // 更新用户头像URL
+            User user = userService.getById(userId);
+            if (user != null) {
+                // 删除旧头像文件（如果存在）
+                String oldAvatarUrl = user.getUserAvatar();
+                if (StringUtils.isNotBlank(oldAvatarUrl)) {
+                    try {
+                        String oldFileName = extractFilePathFromUrl(oldAvatarUrl);
+                        minioClient.removeObject(
+                                RemoveObjectArgs.builder()
+                                        .bucket(minioConfiguration.getBucket())
+                                        .object(oldFileName)
+                                        .build()
+                        );
+                    } catch (Exception e) {
+                        // 记录日志但不影响新文件上传
+                        log.error("删除旧头像文件失败", e);
+                    }
+                }
+                user.setUserAvatar(avatarUrl);
+                userService.updateById(user);
+            }
+            return ResultUtils.success(avatarUrl);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("文件上传失败", e);
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "文件上传失败");
+        }
+    }
     // region 登录相关
-
     /**
      * 用户注册
      *
@@ -84,7 +160,6 @@ public class UserController {
         return ResultUtils.success(loginUserVO);
     }
 
-
     /**
      * 用户注销
      *
@@ -108,8 +183,71 @@ public class UserController {
      */
     @GetMapping("/get/login")
     public BaseResponse<LoginUserVO> getLoginUser(HttpServletRequest request) {
+        // 1. 从请求头获取 Token
+        String token = request.getHeader("Authorization");
+        if (StringUtils.isBlank(token) || !token.startsWith("Bearer ")) {
+            return ResultUtils.success(null); // 未携带 Token，返回未登录
+        }
+        token = token.substring(7);
+
+        try {
+            // 2. 解析 Token 获取用户 ID
+            Claims claims = JwtUtils.parseToken(token);
+            Long userId = Long.parseLong(claims.get("userId",String.class));
+
+            // 3. 查询用户信息
+            User user = userService.getById(userId);
+            if (user == null) {
+                return ResultUtils.success(null);
+            }
+            return ResultUtils.success(userService.getLoginUserVO(user));
+        } catch (Exception e) {
+            log.info(e.getMessage());
+            // Token 解析失败，返回未登录
+            return ResultUtils.success(null);
+        }
+    }
+
+    /**
+     * 获取当前登录用户的提交记录
+     *
+     * @param request
+     * @return
+     */
+    @GetMapping("/get/userquestion")
+    public BaseResponse<UserQuestionVO> getLoginUserQuestion(HttpServletRequest request) {
+        UserQuestionVO userQuestionVO = getUserQuestionVO(request, null);
+        return ResultUtils.success(userQuestionVO);
+    }
+    private UserQuestionVO getUserQuestionVO(HttpServletRequest request,Long questionId) {
         User user = userService.getLoginUser(request);
-        return ResultUtils.success(userService.getLoginUserVO(user));
+        LoginUserVO loginUserVO = userService.getLoginUserVO(user);
+        UserQuestionVO userQuestionVO = new UserQuestionVO();
+        BeanUtils.copyProperties(loginUserVO, userQuestionVO);
+        QuestionSubmitQueryDTO questionSubmitQueryDTO = new QuestionSubmitQueryDTO();
+        questionSubmitQueryDTO.setUserId(user.getId());
+        if (questionId!=null){
+            questionSubmitQueryDTO.setQuestionId(questionId);
+        }
+        List<QuestionSubmitVO> userQuestionsList = questionFeignClient.list(questionSubmitQueryDTO).stream().map(QuestionSubmitVO::objToVo).peek(questionSubmitVO -> {
+            Question question = questionFeignClient.getOne(questionSubmitVO.getQuestionId());
+            QuestionVO questionVO=QuestionVO.objToVo(question);
+            questionSubmitVO.setQuestionVO(questionVO);
+        }).collect(Collectors.toList());
+        userQuestionVO.setQuestionSubmitList(userQuestionsList);
+        return userQuestionVO;
+    }
+
+    /**
+     * 获取当前登录用户的提交记录
+     *
+     * @param request
+     * @return
+     */
+    @GetMapping("/get/userquestion/{questionId}")
+    public BaseResponse<UserQuestionVO> getLoginUserQuestionByQuestionId(@PathVariable("questionId") Long questionId, HttpServletRequest request) {
+        UserQuestionVO userQuestionVO = getUserQuestionVO(request, questionId);
+        return ResultUtils.success(userQuestionVO);
     }
 
     // endregion
@@ -129,15 +267,9 @@ public class UserController {
         if (userAddRequest == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
-        User user = new User();
-        BeanUtils.copyProperties(userAddRequest, user);
-        // 默认密码 12345678
-        String defaultPassword = "12345678";
-        String encryptPassword = DigestUtils.md5DigestAsHex((UserServiceImpl.SALT + defaultPassword).getBytes());
-        user.setUserPassword(encryptPassword);
-        boolean result = userService.save(user);
-        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
-        return ResultUtils.success(user.getId());
+        // 校验参数
+        Long result = userService.userAdd(userAddRequest);
+        return ResultUtils.success(result);
     }
 
     /**
@@ -153,6 +285,10 @@ public class UserController {
         if (deleteRequest == null || deleteRequest.getId() <= 0) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
+        User loginUser = userService.getLoginUser(request);
+        if (Objects.equals(deleteRequest.getId(), loginUser.getId())){
+            throw new BusinessException(ErrorCode.OPERATION_ERROR,"不能删除自己");
+        }
         boolean b = userService.removeById(deleteRequest.getId());
         return ResultUtils.success(b);
     }
@@ -167,13 +303,11 @@ public class UserController {
     @PostMapping("/update")
     @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Boolean> updateUser(@RequestBody UserUpdateRequest userUpdateRequest,
-            HttpServletRequest request) {
+                                            HttpServletRequest request) {
         if (userUpdateRequest == null || userUpdateRequest.getId() == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
-        User user = new User();
-        BeanUtils.copyProperties(userUpdateRequest, user);
-        boolean result = userService.updateById(user);
+        boolean result = userService.userUpdate(userUpdateRequest);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
         return ResultUtils.success(true);
     }
@@ -220,7 +354,7 @@ public class UserController {
     @PostMapping("/list/page")
     @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Page<User>> listUserByPage(@RequestBody UserQueryRequest userQueryRequest,
-            HttpServletRequest request) {
+                                                   HttpServletRequest request) {
         long current = userQueryRequest.getCurrent();
         long size = userQueryRequest.getPageSize();
         Page<User> userPage = userService.page(new Page<>(current, size),
@@ -237,7 +371,7 @@ public class UserController {
      */
     @PostMapping("/list/page/vo")
     public BaseResponse<Page<UserVO>> listUserVOByPage(@RequestBody UserQueryRequest userQueryRequest,
-            HttpServletRequest request) {
+                                                       HttpServletRequest request) {
         if (userQueryRequest == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
@@ -264,7 +398,7 @@ public class UserController {
      */
     @PostMapping("/update/my")
     public BaseResponse<Boolean> updateMyUser(@RequestBody UserUpdateMyRequest userUpdateMyRequest,
-            HttpServletRequest request) {
+                                              HttpServletRequest request) {
         if (userUpdateMyRequest == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
@@ -275,5 +409,32 @@ public class UserController {
         boolean result = userService.updateById(user);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
         return ResultUtils.success(true);
+    }
+    /**
+     * 从URL中提取文件路径
+     * 例如：从 http://192.168.124.106:9000/hhoj/avatar/xxx.jpg 提取出 avatar/xxx.jpg
+     */
+    private String extractFilePathFromUrl(String url) {
+        try {
+            if (StringUtils.isBlank(url)) {
+                return null;
+            }
+            // 查找最后一个斜杠之前的 "hhoj/" 位置
+            int bucketIndex = url.lastIndexOf(minioConfiguration.getBucket() + "/");
+            if (bucketIndex != -1) {
+                // 返回 bucket 名称后的路径部分
+                return url.substring(bucketIndex + minioConfiguration.getBucket().length() + 1);
+            }
+            return null;
+        } catch (Exception e) {
+            log.error("提取文件路径失败, url: {}", url, e);
+            return null;
+        }
+    }
+    private String getFileExtension(String filename) {
+        return Optional.ofNullable(filename)
+                .filter(f -> f.contains("."))
+                .map(f -> f.substring(f.lastIndexOf(".")))
+                .orElse("");
     }
 }

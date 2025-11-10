@@ -15,7 +15,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableAspectJAutoProxy(proxyTargetClass = true, exposeProxy = true)
 //@ComponentScan("com.qwerlty")
 @EnableDiscoveryClient
-@EnableFeignClients(basePackages = {"com.qwerlty.myojbackendserviceclient.service"})
+@EnableFeignClients(basePackages = {"com.qwerlty.myojbackendserviceclient.client"})
 public class MyojBackendJudgeServiceApplication {
 
     public static void main(String[] args) {

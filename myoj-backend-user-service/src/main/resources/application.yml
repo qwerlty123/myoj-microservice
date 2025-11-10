@@ -26,12 +26,12 @@ spring:
     password: adgjl08642
   # Redis 配置
   # todo 需替换配置，然后取消注释
-#  redis:
-#    database: 1
-#    host: localhost
-#    port: 6379
-#    timeout: 5000
-#    password: 123456
+  redis:
+    database: 1
+    host: 192.168.249.129
+    port: 6379
+    timeout: 5000
+    password: adgjl08642
   # Elasticsearch 配置
   # todo 需替换配置，然后取消注释
 #  elasticsearch:
@@ -75,6 +75,13 @@ cos:
     secretKey: xxx
     region: xxx
     bucket: xxx
+# 用户头像上传 MinIO 配置（与 MinioConfiguration 的 file.minio 前缀对应）
+file:
+  minio:
+    accessKey: admin
+    secretKey: admin123
+    endpoint: http://localhost:9000
+    bucket: myoj
 # 接口文档配置
 knife4j:
   enable: true

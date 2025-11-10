@@ -1,12 +1,9 @@
 package com.qwerlty.myojbackenduserservice.controller.inner;
 
 import com.qwerlty.myojbackendmodel.model.entity.User;
-import com.qwerlty.myojbackendserviceclient.service.UserFeignClient;
+import com.qwerlty.myojbackendserviceclient.client.UserFeignClient;
 import com.qwerlty.myojbackenduserservice.service.UserService;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
 import java.util.Collection;
@@ -20,7 +17,8 @@ public class UserInnerController implements UserFeignClient {
     private UserService userService;
 
     /**
-     * 根据 id 获取用户
+     * 根据id获取用户
+     *
      * @param userId
      * @return
      */
@@ -31,7 +29,8 @@ public class UserInnerController implements UserFeignClient {
     }
 
     /**
-     * 根据 id 获取用户列表
+     * 根据id获取用户列表
+     *
      * @param idList
      * @return
      */
@@ -40,6 +39,16 @@ public class UserInnerController implements UserFeignClient {
     public List<User> listByIds(@RequestParam("idList") Collection<Long> idList) {
         return userService.listByIds(idList);
     }
+    @Override
+    @PostMapping("/update/id")
+    public boolean updateById(@RequestBody User user){
+        return userService.updateById(user);
+    }
 
+    @Override
+    @RequestMapping("/logout")
+    public boolean logout(@RequestParam("token") String token){
+        return userService.userLogoutBytoken(token);
+    }
 }
 

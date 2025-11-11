@@ -18,7 +18,11 @@ spring:
         - id: yuoj-backend-judge-service
           uri: lb://myoj-backend-judge-service
           predicates:
-            - Path=/api/judge/**
+            - Path=/api/comment/**
+        - id: yuoj-backend-comment-service
+          uri: lb://myoj-backend-comment-service
+          predicates:
+            - Path=/api/comment/**
   redis:
     host: 192.168.249.129
     port: 6379

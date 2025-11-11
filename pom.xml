@@ -17,6 +17,7 @@
         <module>myoj-backend-question-service</module>
         <module>myoj-backend-judge-service</module>
         <module>myoj-backend-gateway</module>
+        <module>myoj-backend-comment-service</module>
     </modules>
     <properties>
         <java.version>1.8</java.version>

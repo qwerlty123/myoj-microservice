@@ -7,19 +7,19 @@ spring:
         server-addr: 192.168.249.129:8848
     gateway:
       routes:
-        - id: yuoj-backend-user-service
+        - id: myoj-backend-user-service
           uri: lb://myoj-backend-user-service
           predicates:
             - Path=/api/user/**
-        - id: yuoj-backend-question-service
+        - id: myoj-backend-question-service
           uri: lb://myoj-backend-question-service
           predicates:
             - Path=/api/question/**
-        - id: yuoj-backend-judge-service
+        - id: myoj-backend-judge-service
           uri: lb://myoj-backend-judge-service
           predicates:
-            - Path=/api/comment/**
-        - id: yuoj-backend-comment-service
+            - Path=/api/judge/**
+        - id: myoj-backend-comment-service
           uri: lb://myoj-backend-comment-service
           predicates:
             - Path=/api/comment/**

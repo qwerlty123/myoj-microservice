@@ -67,7 +67,7 @@ public class CommentThumbController {
            int result = commentThumbService.docommentThumb(commentId, loginUser);
            return ResultUtils.success(result);
        }catch (BlockException e){
-           MailUtil.send("3105755134@qq.com", "评论点赞限流告警", "->傻逼用户"+userId+"频繁点赞",false);
+           MailUtil.send("1787129184@qq.com", "评论点赞限流告警", "->傻逼用户"+userId+"频繁点赞",false);
            throw new BusinessException(ErrorCode.TOO_MANY_REQUEST);
        }
     }

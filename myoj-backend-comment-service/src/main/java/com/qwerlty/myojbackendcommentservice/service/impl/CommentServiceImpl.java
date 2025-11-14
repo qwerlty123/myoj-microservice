@@ -56,35 +56,35 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment>
         comment.setContent(content);
         comment.setBeCommentId(beCommentId);
         boolean save = this.save(comment);
-        //通过questionId拿到评论map
-        Map<Long, Comment> commentMap = this.list(new QueryWrapper<Comment>().eq("questionId", questionId)).stream().collect(Collectors.toMap(Comment::getId, c -> c));
-        // 如果是回复评论，更新父评论的回复数
+        if (!save) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "评论失败");
+        }
+        // 如果是回复评论，沿 beCommentId 链向上追溯根父评论，更新回复数
         if (comment.getBeCommentId() != null) {
-            // 查找原始父评论（最顶层的父评论）
-            Long rootParentId = findRootParentId(comment.getBeCommentId(), commentMap);
-
-            // 更新原始父评论的回复数
+            Long rootParentId = findRootParentIdByChain(comment.getBeCommentId());
             Comment rootParent = this.getById(rootParentId);
             if (rootParent != null) {
                 rootParent.setReplyCount(rootParent.getReplyCount() + 1);
                 this.updateById(rootParent);
             }
         }
-        if (!save) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR, "评论失败");
-        }
         return comment.getId();
     }
 
     /**
-     * 查找评论的根父评论ID
+     * 沿 beCommentId 链向上逐条查询，找到最顶层的根父评论 ID。
+     * 评论嵌套通常不超过 3 层，最多 2-3 次主键查询，替代原来加载全量评论建 Map 的方式。
      */
-    private Long findRootParentId(Long commentId, Map<Long, Comment> commentMap) {
-        Comment comment = commentMap.get(commentId);
-        if (comment == null || comment.getBeCommentId() == null) {
-            return commentId;
+    private Long findRootParentIdByChain(Long commentId) {
+        Long currentId = commentId;
+        for (int depth = 0; depth < 50; depth++) {
+            Comment c = this.getById(currentId);
+            if (c == null || c.getBeCommentId() == null) {
+                return currentId;
+            }
+            currentId = c.getBeCommentId();
         }
-        return findRootParentId(comment.getBeCommentId(), commentMap);
+        return currentId;
     }
 
     @Override
@@ -98,10 +98,9 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment>
             return false;
         }
 
-        // 2. 查找所有需要删除的评论ID（包括当前评论及其所有子孙评论）
-        Set<Long> toDeleteIds = new HashSet<>();
+        // 2. 一次查询 + 内存 BFS 找出所有子孙评论 ID
+        Set<Long> toDeleteIds = findAllDescendantIds(commentId, questionId);
         toDeleteIds.add(commentId);
-        findAllChildComments(commentId, toDeleteIds, questionId);
         // 3. 删除评论本身（逻辑删除）
         return this.removeByIds(toDeleteIds);
     }
@@ -201,22 +200,37 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment>
     }
 
     /**
-     * 递归查找所有子孙评论的ID
+     * 一次查询该题目所有评论的 id 和 beCommentId（只查两列，不拉 content 等大字段），
+     * 在内存中 BFS 找出指定评论的所有后代 ID，替代原来每层递归都查一次数据库的 N+1 方式。
      */
-    private void findAllChildComments(Long commentId, Set<Long> toDeleteIds, Long questionId) {
-        // 查找所有直接引用该评论的子评论
-        QueryWrapper<Comment> queryWrapper = new QueryWrapper<>();
-        queryWrapper.eq("beCommentId", commentId);
-        queryWrapper.eq("isDelete", 0);
-        queryWrapper.eq("questionId", questionId);
-        List<Comment> childComments = this.list(queryWrapper);
+    private Set<Long> findAllDescendantIds(Long commentId, Long questionId) {
+        List<Comment> allComments = this.list(new QueryWrapper<Comment>()
+                .eq("questionId", questionId)
+                .eq("isDelete", 0)
+                .select("id", "beCommentId"));
 
-        for (Comment childComment : childComments) {
-            // 将子评论ID加入待删除集合
-            toDeleteIds.add(childComment.getId());
-            // 继续递归查找该子评论的子评论
-            findAllChildComments(childComment.getId(), toDeleteIds, questionId);
+        Map<Long, List<Long>> parentToChildren = new HashMap<>();
+        for (Comment c : allComments) {
+            if (c.getBeCommentId() != null) {
+                parentToChildren.computeIfAbsent(c.getBeCommentId(), k -> new ArrayList<>()).add(c.getId());
+            }
         }
+
+        Set<Long> descendants = new HashSet<>();
+        Queue<Long> queue = new LinkedList<>();
+        queue.add(commentId);
+        while (!queue.isEmpty()) {
+            Long current = queue.poll();
+            List<Long> children = parentToChildren.get(current);
+            if (children != null) {
+                for (Long childId : children) {
+                    if (descendants.add(childId)) {
+                        queue.add(childId);
+                    }
+                }
+            }
+        }
+        return descendants;
     }
 
     @Override
@@ -275,47 +289,26 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment>
 
     @Override
     public List<CommentVO> listCommentReplies(long commentId) {
-//        // 查询回复列表
-//        QueryWrapper<Comment> queryWrapper = new QueryWrapper<>();
-//        queryWrapper.eq("beCommentId", commentId)
-//                .orderByDesc("createTime");
-//
-//        List<Comment> replies = this.list(queryWrapper);
-//
-//        if (CollectionUtils.isEmpty(replies)) {
-//            return new ArrayList<>();
-//        }
-        Comment fatherComment = this.getById(commentId);
-        if (fatherComment == null) {
+        List<Comment> replies = this.list(new QueryWrapper<Comment>()
+                .eq("beCommentId", commentId)
+                .eq("isDelete", 0)
+                .orderByDesc("createTime"));
+
+        if (CollectionUtils.isEmpty(replies)) {
             return Collections.emptyList();
         }
-        Long questionId = fatherComment.getQuestionId();
-        List<Comment> commentList = this.list(new QueryWrapper<Comment>().eq("questionId", questionId));
-        if (commentList==null){
-            return new ArrayList<>();
-        }
-        // 2. 获取所有评论用户的信息
-        Set<Long> userIds = commentList.stream()
-                .map(Comment::getUserId)
-                .collect(Collectors.toSet());
+
+        Set<Long> userIds = replies.stream().map(Comment::getUserId).collect(Collectors.toSet());
         Map<Long, UserVO> userVOMap = userFeignClient.listByIds(userIds).stream()
                 .map(user -> userFeignClient.getUserVO(user))
                 .collect(Collectors.toMap(UserVO::getId, userVO -> userVO));
-        // 3. 转换为VO并填充用户信息
-        List<CommentVO> commentVOList = commentList.stream().map(reply -> {
+
+        return replies.stream().map(reply -> {
             CommentVO replyVO = new CommentVO();
             BeanUtils.copyProperties(reply, replyVO);
             replyVO.setUserVO(userVOMap.get(reply.getUserId()));
             return replyVO;
         }).collect(Collectors.toList());
-        List<CommentVO> commentVOS = buildCommentTree(commentVOList);
-        // 用全部评论 id -> VO 的映射，避免只含根节点时对子评论 id 取不到导致 NPE
-        Map<Long, CommentVO> allMap = commentVOList.stream().collect(Collectors.toMap(CommentVO::getId, c -> c));
-        CommentVO target = allMap.get(commentId);
-        if (target == null) {
-            return Collections.emptyList();
-        }
-        return target.getChildren() != null ? target.getChildren() : Collections.emptyList();
     }
 
     @Override
@@ -335,8 +328,6 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment>
     @Transactional(rollbackFor = Exception.class)
     public boolean removeComment(long commentId, long userId) {
         Comment comment = this.getById(commentId);
-        Long questionId = comment.getQuestionId();
-        Map<Long, Comment> commentMap = this.list(new QueryWrapper<Comment>().eq("questionId", questionId)).stream().collect(Collectors.toMap(Comment::getId, c -> c));
         if (comment == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND_ERROR);
         }
@@ -347,12 +338,11 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment>
         }
         Long rootParentId = null;
         if (comment.getBeCommentId() != null) {
-            rootParentId = findRootParentId(comment.getBeCommentId(), commentMap);
+            rootParentId = findRootParentIdByChain(comment.getBeCommentId());
         }
-        // 查找所有需要删除的评论ID
-        Set<Long> toDeleteIds = new HashSet<>();
+        // 一次查询 + 内存 BFS 找出所有子孙评论 ID
+        Set<Long> toDeleteIds = findAllDescendantIds(commentId, comment.getQuestionId());
         toDeleteIds.add(commentId);
-        findAllChildComments(commentId, toDeleteIds, comment.getQuestionId());
         boolean success = this.removeByIds(toDeleteIds);
         // 更新原始父评论的回复数
         if (success && rootParentId != null) {

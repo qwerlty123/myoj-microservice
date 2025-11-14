@@ -57,12 +57,32 @@ create table if not exists question_submit
     status     int          default 0                not null comment '判题状态（0-待判题 1-判题中 2-成功 3-失败）',
     questionId bigint                               not null comment '题目 id',
     userId     bigint                               not null comment '提交用户 id',
+    retryCount int          default 0                not null comment '重试次数',
+    lastError  varchar(1024)                        null comment '最近一次错误',
+    nextRetryTime datetime                           null comment '下一次重试时间',
     createTime datetime     default CURRENT_TIMESTAMP not null comment '创建时间',
     updateTime datetime     default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
     isDelete   tinyint      default 0                not null comment '是否删除',
     index idx_questionId (questionId),
-    index idx_userId (userId)
+    index idx_userId (userId),
+    index idx_userId_status_questionId (userId, status, questionId)
 ) comment '题目提交' collate = utf8mb4_unicode_ci;
+
+-- 判题 outbox（生产端可靠投递）
+create table if not exists judge_task_outbox
+(
+    id            bigint                               not null comment 'id' primary key,
+    questionSubmitId bigint                            not null comment '提交 id',
+    payload       varchar(128)                         not null comment '消息体',
+    status        tinyint      default 0                not null comment '状态（0-待投递 1-已投递 2-终止 3-投递中）',
+    retryCount    int          default 0                not null comment '投递重试次数',
+    nextRetryTime datetime     default CURRENT_TIMESTAMP not null comment '下一次重试时间',
+    lastError     varchar(1024)                        null comment '最近一次投递错误',
+    createTime    datetime     default CURRENT_TIMESTAMP not null comment '创建时间',
+    updateTime    datetime     default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
+    index idx_submitId (questionSubmitId),
+    index idx_status_nextRetryTime (status, nextRetryTime)
+) comment '判题投递外盒' collate = utf8mb4_unicode_ci;
 
 -- 评论表（与 Comment 实体一致）
 create table if not exists comment
@@ -78,7 +98,8 @@ create table if not exists comment
     isDelete    tinyint  default 0                 not null comment '是否删除',
     index idx_userId (userId),
     index idx_questionId (questionId),
-    index idx_beCommentId (beCommentId)
+    index idx_beCommentId (beCommentId),
+    index idx_questionId_createTime (questionId, createTime DESC)
 ) comment '评论' collate = utf8mb4_unicode_ci;
 
 -- 评论点赞表（与 CommentThumb 实体一致，硬删除）
@@ -89,8 +110,7 @@ create table if not exists comment_thumb
     userId     bigint                             not null comment '用户 id',
     createTime datetime default CURRENT_TIMESTAMP not null comment '创建时间',
     updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
-    index idx_commentId (commentId),
-    index idx_userId (userId)
+    unique index uk_userId_commentId (userId, commentId)
 ) comment '评论点赞';
 
 -- 帖子表

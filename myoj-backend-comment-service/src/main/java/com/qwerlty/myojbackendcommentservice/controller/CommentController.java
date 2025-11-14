@@ -62,7 +62,7 @@ public class CommentController {
            Long commentId = commentService.addComment(commentAddRequest);
            return ResultUtils.success(commentId);
        }catch (BlockException e){
-            MailUtil.send("3105755134@qq.com", "评论限流告警", "->傻逼用户"+userId+"频繁发评论",false);
+            MailUtil.send("1787129184@qq.com", "评论限流告警", "->傻逼用户"+userId+"频繁发评论",false);
             throw new BusinessException(ErrorCode.TOO_MANY_REQUEST);
        }
     }

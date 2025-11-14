@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.qwerlty.myojbackendmodel.model.dto.questionsubmit.QuestionSubmitQueryDTO;
 import com.qwerlty.myojbackendmodel.model.entity.Question;
 import com.qwerlty.myojbackendmodel.model.entity.QuestionSubmit;
+import com.qwerlty.myojbackendmodel.model.enums.QuestionSubmitStatusEnum;
 import com.qwerlty.myojbackendquestionservice.service.QuestionService;
 import com.qwerlty.myojbackendquestionservice.service.QuestionSubmitService;
 import com.qwerlty.myojbackendserviceclient.client.QuestionFeignClient;
@@ -74,6 +75,26 @@ public class QuestionInnerController implements QuestionFeignClient {
     @Override
     @PostMapping("/question_submit/update/id")
     public Boolean updateQuestionSubmitById(@RequestBody QuestionSubmit questionSubmit) {
+        if (questionSubmit == null || questionSubmit.getId() == null) {
+            return false;
+        }
+        Integer status = questionSubmit.getStatus();
+        if (status == null) {
+            return false;
+        }
+        // 只允许合法状态流转，避免重复消费/并发写错状态
+        if (QuestionSubmitStatusEnum.RUNNING.getValue().equals(status)) {
+            return questionSubmitService.claimForJudge(questionSubmit.getId());
+        }
+        if (QuestionSubmitStatusEnum.SUCCEED.getValue().equals(status)
+                || QuestionSubmitStatusEnum.FAILED.getValue().equals(status)) {
+            return questionSubmitService.finishFromRunning(
+                    questionSubmit.getId(),
+                    status,
+                    questionSubmit.getJudgeInfo(),
+                    questionSubmit.getLastError()
+            );
+        }
         return questionSubmitService.updateById(questionSubmit);
     }
     @Override

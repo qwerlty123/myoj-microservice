@@ -32,10 +32,10 @@ public class RabbitmqConsumer {
             if (questionSubmit.getStatus()!= QuestionSubmitStatusEnum.WAITING.getValue()) {
                 channel.basicAck(deliveryTag, false); // 成功处理消息，确认
             } else {
-                channel.basicNack(deliveryTag, false, false); // 如果doJudge返回false，表示需要重新处理该消息
+                channel.basicNack(deliveryTag,  false, false); // 如果doJudge返回false，表示需要重新处理该消息
             }
         } catch (BusinessException e) {
-            if (e.getMessage().equals("题目正在判题中")){
+            if ("题目正在判题中".equals(e.getMessage()) || "题目已被处理".equals(e.getMessage())) {
                 channel.basicAck(deliveryTag, false); // 成功处理消息，确认
             }else {
                 channel.basicNack(deliveryTag, false, false);

@@ -16,20 +16,20 @@ MinIO 是一个对象存储服务，可以理解成「自己搭的网盘」，�
 2. **拉取并运行 MinIO 容器**（在终端执行）：
 
    ```bash
-   docker run -d -p 9000:9000 -p 9001:9001 --name minio-myoj ^
-     -e "MINIO_ROOT_USER=minioadmin" ^
-     -e "MINIO_ROOT_PASSWORD=minioadmin123" ^
+   docker run -d -p 9002:9000 -p 9003:9001 --name minio-myoj ^
+     -e "MINIO_ROOT_USER=admin" ^
+     -e "MINIO_ROOT_PASSWORD=adgjl08642" ^
      minio/minio server /data --console-address ":9001"
    ```
 
    - 若在 **Linux / Mac** 下，把 `^` 换成 `\`，并写成一行或按行用 `\` 换行。
-   - `9000`：API 端口（程序上传用）  
-   - `9001`：控制台端口（浏览器管理用）  
-   - `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`：控制台和 API 的账号密码，可改成你自己的。
+   - `9002`：宿主机 API 端口（容器内为 9000，程序上传用）
+   - `9003`：宿主机控制台端口（容器内为 9001，浏览器管理用）
+   - `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`：控制台和 API 的账号密码。
 
 3. **确认 MinIO 已启动**  
-   浏览器打开：`http://localhost:9001`  
-   用上面的账号密码登录，能进控制台即表示成功。
+   浏览器打开：`http://localhost:9003`
+   用户名填写 `admin`，密码填写 `adgjl08642`，能进控制台即表示成功。
 
 ### 方式 B：直接下载 MinIO 二进制（不用 Docker）
 
@@ -71,9 +71,9 @@ MinIO 是一个对象存储服务，可以理解成「自己搭的网盘」，�
 ```yaml
 file:
   minio:
-    accessKey: minioadmin
-    secretKey: minioadmin123
-    endpoint: http://localhost:9000
+    accessKey: admin
+    secretKey: adgjl08642
+    endpoint: http://124.221.250.220:9002
     bucket: myoj
 ```
 
@@ -81,9 +81,9 @@ file:
 
 | 配置项     | 说明 |
 |------------|------|
-| `accessKey` | MinIO 登录用户名（Docker 示例里是 `minioadmin`） |
-| `secretKey` | MinIO 登录密码（Docker 示例里是 `minioadmin123`） |
-| `endpoint` | MinIO API 地址，本机即 `http://localhost:9000`；远程则改为 `http://服务器IP:9000` |
+| `accessKey` | MinIO 登录用户名（当前为 `admin`） |
+| `secretKey` | MinIO 登录密码（当前为 `adgjl08642`） |
+| `endpoint` | MinIO API 地址，当前服务器为 `http://124.221.250.220:9002` |
 | `bucket`   | 存储桶名称，要和上面创建的桶名一致，如 `myoj` |
 
 若用 `application-dev.yml` 等环境区分，可在对应环境里覆盖上述四项。
@@ -153,7 +153,7 @@ fetch('http://localhost:8102/api/user/upload/avatar', {
 ## 七、返回结果说明
 
 - 成功时，接口返回里的 `data` 即为头像的完整 URL，例如：  
-  `http://localhost:9000/myoj/avatar/1_1730123456789.jpg`
+  `http://124.221.250.220:9002/myoj/avatar/1_1730123456789.jpg`
 - 前端拿到后，可把该 URL 存到用户信息里或直接用于 `<img src="...">` 显示头像。
 - 再次上传会覆盖该用户旧头像（代码里会删 MinIO 上的旧文件）。
 
@@ -163,7 +163,7 @@ fetch('http://localhost:8102/api/user/upload/avatar', {
 
 | 现象 | 可能原因 | 处理 |
 |------|----------|------|
-| 连接被拒绝 / Connection refused | MinIO 未启动或端口不对 | 确认 MinIO 在 9000 端口，且 `endpoint` 写对 |
+| 连接被拒绝 / Connection refused | MinIO 未启动或端口不对 | 确认服务器宿主机映射为 9002（容器内 9000），且 `endpoint` 写对 |
 | Access Denied / 403 | accessKey/secretKey 错误或桶策略限制 | 检查 yml 里的账号密码；在 MinIO 控制台检查桶的 Access 策略 |
 | Bucket 不存在 | 未创建桶或 bucket 名不一致 | 在 MinIO 控制台创建名为 `myoj` 的桶，并保证 yml 里 `bucket: myoj` |
 | 只能上传图片 | 接口做了校验 | 仅允许 `image/*`，且限制约 2MB，属正常 |

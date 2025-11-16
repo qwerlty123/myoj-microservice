@@ -16,7 +16,7 @@
 //@Component
 //public class InitRabbitMqBean {
 //
-//    @Value("${spring.rabbitmq.host:192.168.249.129}")
+//    @Value("${spring.rabbitmq.host:124.221.250.220}")
 //    private String host;
 //
 //    @PostConstruct

@@ -32,6 +32,7 @@ import com.qwerlty.myojbackendquestionservice.service.QuestionSubmitService;
 import com.qwerlty.myojbackendserviceclient.client.UserFeignClient;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.web.bind.annotation.*;
 
@@ -70,6 +71,9 @@ public class QuestionController {
 
     @Resource
     private CountManager countManager;
+
+    @Value("${load-test.crawler-detection-enabled:true}")
+    private boolean crawlerDetectionEnabled;
 
     // region 增删改查
 
@@ -531,6 +535,9 @@ public class QuestionController {
      * @param loginUserId
      */
     private void crawlerDetect(long loginUserId,HttpServletRequest request) {
+        if (!crawlerDetectionEnabled) {
+            return;
+        }
         // 调用多少次时告警
         final int WARN_COUNT = 10;
         // 超过多少次封号

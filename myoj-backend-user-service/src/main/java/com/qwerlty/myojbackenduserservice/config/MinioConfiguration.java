@@ -17,6 +17,9 @@ public class MinioConfiguration {
 
     private String endpoint;
 
+    /** Public URL used in avatar responses; may differ from the internal SDK endpoint. */
+    private String publicEndpoint;
+
     private String bucket;
 
     @Bean
@@ -25,5 +28,9 @@ public class MinioConfiguration {
                 .endpoint(endpoint)
                 .credentials(accessKey, secretKey)
                 .build();
+    }
+
+    public String resolvePublicEndpoint() {
+        return publicEndpoint == null || publicEndpoint.trim().isEmpty() ? endpoint : publicEndpoint;
     }
 }

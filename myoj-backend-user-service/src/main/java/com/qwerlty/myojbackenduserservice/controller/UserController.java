@@ -86,7 +86,8 @@ public class UserController {
                             .build()
             );
             // 获取文件访问URL
-            String avatarUrl = String.format("%s/%s/%s",minioConfiguration.getEndpoint(),minioConfiguration.getBucket(),fileName);
+            String avatarUrl = String.format("%s/%s/%s", minioConfiguration.resolvePublicEndpoint(),
+                    minioConfiguration.getBucket(), fileName);
             // 更新用户头像URL
             User user = userService.getById(userId);
             if (user != null) {

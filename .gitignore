@@ -31,3 +31,14 @@ build/
 
 ### VS Code ###
 .vscode/
+.DS_Store
+
+### Load test output and local accounts ###
+load-test/results/
+load-test/accounts.csv
+
+### Remote infrastructure deployment ###
+deploy/infra/.env
+deploy/infra/.env.internal
+deploy/infra/local-dev.env
+deploy/infra/backups/

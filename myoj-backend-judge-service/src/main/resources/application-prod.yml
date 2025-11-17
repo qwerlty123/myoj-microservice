@@ -1,0 +1,22 @@
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${MYSQL_URL}
+    username: ${MYSQL_USERNAME:admin}
+    password: ${MYSQL_PASSWORD:adgjl08642}
+  cloud:
+    nacos:
+      username: ${NACOS_USERNAME:nacos}
+      password: ${NACOS_PASSWORD:adgjl08642}
+      discovery:
+        server-addr: ${NACOS_SERVER_ADDR:124.221.250.220:8848}
+        group: ${NACOS_DISCOVERY_GROUP:DEFAULT_GROUP}
+  rabbitmq:
+    host: ${RABBITMQ_HOST:124.221.250.220}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:admin}
+    password: ${RABBITMQ_PASSWORD:adgjl08642}
+
+codesandbox:
+  url: ${CODESANDBOX_URL:http://127.0.0.1:8090/executeCode}
+  secretKey: ${CODESANDBOX_SECRET_KEY:adgjl08642}

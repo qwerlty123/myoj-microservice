@@ -28,6 +28,11 @@ scrape_configs:
     static_configs:
       - targets: ["host.docker.internal:8105"]
 
+  - job_name: myoj-ai-service
+    metrics_path: /api/ai/actuator/prometheus
+    static_configs:
+      - targets: ["host.docker.internal:8106"]
+
   - job_name: myoj-codesandbox
     metrics_path: /actuator/prometheus
     static_configs:

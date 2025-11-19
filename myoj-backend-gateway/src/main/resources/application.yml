@@ -23,6 +23,10 @@ spring:
           uri: lb://myoj-backend-comment-service
           predicates:
             - Path=/api/comment/**
+        - id: myoj-backend-ai-service
+          uri: lb://myoj-backend-ai-service
+          predicates:
+            - Path=/api/ai/**
   redis:
     host: 124.221.250.220
     port: 6379

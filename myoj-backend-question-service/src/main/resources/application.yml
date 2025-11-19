@@ -123,6 +123,10 @@ judge-consistency:
 load-test:
   crawler-detection-enabled: ${LOAD_TEST_CRAWLER_DETECTION_ENABLED:true}
 
+myoj:
+  ai:
+    internal-token: ${AI_INTERNAL_TOKEN:change-me-internal-token}
+
 management:
   # 当前部署未启用 Elasticsearch，避免 Actuator 探测本机 9200 导致健康状态告警。
   health:

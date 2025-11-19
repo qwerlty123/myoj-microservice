@@ -19,6 +19,10 @@ target/
 *.iml
 *.ipr
 
+### AI ###
+
+/ai-local.env
+
 ### NetBeans ###
 /nbproject/private/
 /nbbuild/

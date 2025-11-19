@@ -25,3 +25,7 @@ spring:
 codesandbox:
   url: ${CODESANDBOX_URL:http://127.0.0.1:8090/executeCode}
   secretKey: ${CODESANDBOX_SECRET_KEY:adgjl08642}
+
+myoj:
+  ai:
+    internal-token: ${AI_INTERNAL_TOKEN}

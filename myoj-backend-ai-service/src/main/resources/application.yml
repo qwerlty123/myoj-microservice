@@ -1,0 +1,133 @@
+spring:
+  application:
+    name: myoj-backend-ai-service
+  profiles:
+    # 本机运行后端、服务器运行中间件；环境变量仍可覆盖此值。
+    active: dev
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://124.221.250.220:3306/myoj?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+    username: ${MYSQL_USERNAME:admin}
+    # 密码、API Key 和内部令牌不写入配置文件。
+    password: ${MYSQL_PASSWORD}
+  data:
+    redis:
+      host: 124.221.250.220
+      port: 6379
+      password: ${REDIS_PASSWORD}
+      database: ${REDIS_DATABASE:1}
+      timeout: 5s
+  rabbitmq:
+    host: 124.221.250.220
+    port: 5672
+    username: ${RABBITMQ_USERNAME:admin}
+    password: ${RABBITMQ_PASSWORD}
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    listener:
+      simple:
+        acknowledge-mode: manual
+        prefetch: 1
+        concurrency: 2
+        max-concurrency: 2
+  cloud:
+    nacos:
+      username: nacos
+      password: ${NACOS_PASSWORD}
+      discovery:
+        server-addr: 124.221.250.220:8848
+        group: LOCAL_DEV_GROUP
+  ai:
+    retry:
+      max-attempts: 1
+    model:
+      chat: openai
+      embedding: openai
+    openai:
+      api-key: ${AI_CHAT_API_KEY}
+      chat:
+        base-url: https://api.deepseek.com
+        api-key: ${AI_CHAT_API_KEY}
+        options:
+          model: deepseek-v4-flash
+          temperature: 0.2
+      embedding:
+        base-url: https://dashscope.aliyuncs.com/compatible-mode
+        api-key: ${AI_EMBEDDING_API_KEY}
+        options:
+          model: text-embedding-v4
+    vectorstore:
+      qdrant:
+        host: ${QDRANT_HOST:124.221.250.220}
+        port: ${QDRANT_GRPC_PORT:6334}
+        api-key: ${QDRANT_API_KEY}
+        collection-name: myoj_knowledge_${AI_KNOWLEDGE_VERSION:v1}
+        use-tls: ${QDRANT_USE_TLS:false}
+        # 首次导入知识库时让 Spring AI 先创建对应 collection。
+        initialize-schema: ${AI_KNOWLEDGE_INITIALIZE:false}
+      observations:
+        log-query-response: false
+    tools:
+      observations:
+        include-content: false
+    chat:
+      client:
+        observations:
+          log-prompt: false
+          log-completion: false
+      observations:
+        log-prompt: false
+        log-completion: false
+        include-error-logging: false
+server:
+  address: 0.0.0.0
+  port: 8106
+  servlet:
+    context-path: /api/ai
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: false
+  global-config:
+    db-config:
+      id-type: assign_id
+
+myoj:
+  ai:
+    internal-token: ${AI_INTERNAL_TOKEN}
+    model-name: deepseek-v4-flash
+    prompt-version: v1
+    knowledge-version: ${AI_KNOWLEDGE_VERSION:v1}
+    knowledge:
+      initialize: ${AI_KNOWLEDGE_INITIALIZE:false}
+      top-k: 5
+      similarity-threshold: 0.65
+      overlap-chars: 400
+      # DashScope text-embedding-v4 每次最多接收 10 条内容。
+      embedding-batch-size: ${AI_KNOWLEDGE_EMBEDDING_BATCH_SIZE:10}
+    task:
+      dispatch-interval-ms: 1000
+      recovery-interval-ms: 15000
+      running-timeout-ms: 120000
+      analysis-timeout-ms: 90000
+      max-dispatch-retry: 8
+      max-execute-retry: 3
+      publisher-confirm-timeout-ms: 3000
+    rate-limit:
+      per-user-per-hour: 10
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+logging:
+  level:
+    org.springframework.ai.chat.client.advisor: INFO

@@ -1,0 +1,25 @@
+spring:
+  datasource:
+    url: jdbc:mysql://124.221.250.220:3306/myoj?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+    username: ${MYSQL_USERNAME:admin}
+    password: ${MYSQL_PASSWORD}
+  data:
+    redis:
+      host: 124.221.250.220
+      port: 6379
+      password: ${REDIS_PASSWORD}
+  rabbitmq:
+    host: 124.221.250.220
+    port: 5672
+    username: ${RABBITMQ_USERNAME:admin}
+    password: ${RABBITMQ_PASSWORD}
+  cloud:
+    nacos:
+      username: nacos
+      password: ${NACOS_PASSWORD}
+      discovery:
+        server-addr: 124.221.250.220:8848
+
+myoj:
+  ai:
+    internal-token: ${AI_INTERNAL_TOKEN}

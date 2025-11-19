@@ -1,5 +1,6 @@
 package com.qwerlty.myojbackendjudgeservice.judge.codesandbox.impl;
 
+import cn.hutool.http.HttpResponse;
 import cn.hutool.http.HttpUtil;
 import cn.hutool.json.JSONUtil;
 import com.qwerlty.myojbackendcommon.common.ErrorCode;
@@ -27,21 +28,47 @@ public class RemoteCodeSandbox implements CodeSandbox {
     @Value("${codesandbox.secretKey:}")
     private String secretKey;
 
+    @Value("${codesandbox.timeoutMillis:120000}")
+    private int timeoutMillis;
+
     @Override
     public ExecuteCodeResponse executeCode(ExecuteCodeRequest executeCodeRequest) {
         String json = JSONUtil.toJsonStr(executeCodeRequest);
         long timestamp = System.currentTimeMillis();
         String signature = ApiSignUtil.sign(secretKey, timestamp, json);
 
-        String responseStr = HttpUtil.createPost(sandboxUrl)
+        try (HttpResponse response = HttpUtil.createPost(sandboxUrl)
                 .header(HEADER_TIMESTAMP, String.valueOf(timestamp))
                 .header(HEADER_SIGNATURE, signature)
+                .header("Content-Type", "application/json; charset=UTF-8")
                 .body(json)
-                .execute()
-                .body();
-        if (StringUtils.isBlank(responseStr)) {
-            throw new BusinessException(ErrorCode.API_REQUEST_ERROR, "executeCode remoteSandbox error, message = " + responseStr);
+                .timeout(timeoutMillis)
+                .execute()) {
+            return parseResponse(response.getStatus(), response.body());
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            throw new BusinessException(ErrorCode.API_REQUEST_ERROR, "远程代码沙箱不可用: " + message);
         }
-        return JSONUtil.toBean(responseStr, ExecuteCodeResponse.class);
+    }
+
+    ExecuteCodeResponse parseResponse(int httpStatus, String responseStr) {
+        if (httpStatus < 200 || httpStatus >= 300) {
+            throw new BusinessException(ErrorCode.API_REQUEST_ERROR, "远程代码沙箱返回 HTTP " + httpStatus);
+        }
+        if (StringUtils.isBlank(responseStr)) {
+            throw new BusinessException(ErrorCode.API_REQUEST_ERROR, "远程代码沙箱返回空响应");
+        }
+        ExecuteCodeResponse response;
+        try {
+            response = JSONUtil.toBean(responseStr, ExecuteCodeResponse.class);
+        } catch (Exception e) {
+            throw new BusinessException(ErrorCode.API_REQUEST_ERROR, "远程代码沙箱响应格式错误");
+        }
+        if (response == null || response.getStatus() == null) {
+            throw new BusinessException(ErrorCode.API_REQUEST_ERROR, "远程代码沙箱响应缺少状态字段");
+        }
+        return response;
     }
 }

@@ -26,6 +26,9 @@ COMPOSE=(docker compose --env-file .env --env-file .env.internal)
 printf '\nEndpoint checks:\n'
 curl --fail --silent "http://127.0.0.1:${NACOS_PORT}/nacos/v1/console/health/liveness" && printf '  Nacos: OK\n' || printf '  Nacos: FAILED\n'
 curl --fail --silent "http://127.0.0.1:${MINIO_PORT}/minio/health/live" && printf '  MinIO: OK\n' || printf '  MinIO: FAILED\n'
+curl --fail --silent --header "api-key: ${QDRANT_API_KEY}" \
+  "http://127.0.0.1:${QDRANT_HTTP_PORT}/collections" \
+  >/dev/null && printf '  Qdrant: OK\n' || printf '  Qdrant: FAILED\n'
 "${COMPOSE[@]}" exec -T mysql mysqladmin ping -h 127.0.0.1 -uroot "-p${MYSQL_ROOT_PASSWORD}" --silent >/dev/null && printf '  MySQL: OK\n' || printf '  MySQL: FAILED\n'
 "${COMPOSE[@]}" exec -T redis redis-cli --no-auth-warning -a "${REDIS_PASSWORD}" ping >/dev/null && printf '  Redis: OK\n' || printf '  Redis: FAILED\n'
 "${COMPOSE[@]}" exec -T rabbitmq rabbitmq-diagnostics -q ping >/dev/null && printf '  RabbitMQ: OK\n' || printf '  RabbitMQ: FAILED\n'

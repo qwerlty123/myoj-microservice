@@ -60,6 +60,8 @@ spring:
     password: adgjl08642
     publisher-confirm-type: correlated
     publisher-returns: true   # 开启消息路由失败回调
+    template:
+      mandatory: true
 
 server:
   address: 0.0.0.0
@@ -112,12 +114,14 @@ judge-consistency:
     dispatch-interval-ms: 3000
     batch-size: 20
     max-retry: 8
+    lease-ms: 30000
+    confirm-timeout-ms: 5000
   submission:
     compensate-interval-ms: 15000
     batch-size: 50
     max-retry: 3
     running-timeout-ms: 180000
-    waiting-timeout-ms: 60000
+    retry-backoff-ms: 5000
 
 # 压测时设为 false，避免专用压测账号触发邮件告警和封禁。
 load-test:

@@ -5,12 +5,10 @@ import lombok.Getter;
 @Getter
 public enum AiFeedbackStatusEnum {
     PENDING(0),
-    DISPATCHING(1),
-    QUEUED(2),
-    RUNNING(3),
-    SUCCESS(4),
-    FAILED(5),
-    TIMEOUT(6);
+    RUNNING(1),
+    SUCCESS(2),
+    FAILED(3),
+    TIMEOUT(4);
 
     private final int value;
 

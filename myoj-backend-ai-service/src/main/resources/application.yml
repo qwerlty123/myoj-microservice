@@ -6,36 +6,23 @@ spring:
     active: dev
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://124.221.250.220:3306/myoj?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+    url: ${MYSQL_URL:jdbc:mysql://124.221.250.220:3306/myoj?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}
     username: ${MYSQL_USERNAME:admin}
     # 密码、API Key 和内部令牌不写入配置文件。
     password: ${MYSQL_PASSWORD}
   data:
     redis:
-      host: 124.221.250.220
-      port: 6379
+      host: ${REDIS_HOST:124.221.250.220}
+      port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD}
       database: ${REDIS_DATABASE:1}
       timeout: 5s
-  rabbitmq:
-    host: 124.221.250.220
-    port: 5672
-    username: ${RABBITMQ_USERNAME:admin}
-    password: ${RABBITMQ_PASSWORD}
-    publisher-confirm-type: correlated
-    publisher-returns: true
-    listener:
-      simple:
-        acknowledge-mode: manual
-        prefetch: 1
-        concurrency: 2
-        max-concurrency: 2
   cloud:
     nacos:
       username: nacos
       password: ${NACOS_PASSWORD}
       discovery:
-        server-addr: 124.221.250.220:8848
+        server-addr: ${NACOS_SERVER_ADDR:124.221.250.220:8848}
         group: LOCAL_DEV_GROUP
   ai:
     retry:
@@ -46,16 +33,16 @@ spring:
     openai:
       api-key: ${AI_CHAT_API_KEY}
       chat:
-        base-url: https://api.deepseek.com
+        base-url: ${AI_CHAT_BASE_URL:https://api.deepseek.com}
         api-key: ${AI_CHAT_API_KEY}
         options:
-          model: deepseek-v4-flash
+          model: ${AI_CHAT_MODEL:deepseek-v4-flash}
           temperature: 0.2
       embedding:
-        base-url: https://dashscope.aliyuncs.com/compatible-mode
+        base-url: ${AI_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
         api-key: ${AI_EMBEDDING_API_KEY}
         options:
-          model: text-embedding-v4
+          model: ${AI_EMBEDDING_MODEL:text-embedding-v4}
     vectorstore:
       qdrant:
         host: ${QDRANT_HOST:124.221.250.220}
@@ -95,8 +82,8 @@ mybatis-plus:
 myoj:
   ai:
     internal-token: ${AI_INTERNAL_TOKEN}
-    model-name: deepseek-v4-flash
-    prompt-version: v1
+    model-name: ${AI_CHAT_MODEL:deepseek-v4-flash}
+    prompt-version: ${AI_PROMPT_VERSION:v1}
     knowledge-version: ${AI_KNOWLEDGE_VERSION:v1}
     knowledge:
       initialize: ${AI_KNOWLEDGE_INITIALIZE:false}
@@ -106,13 +93,18 @@ myoj:
       # DashScope text-embedding-v4 每次最多接收 10 条内容。
       embedding-batch-size: ${AI_KNOWLEDGE_EMBEDDING_BATCH_SIZE:10}
     task:
-      dispatch-interval-ms: 1000
       recovery-interval-ms: 15000
       running-timeout-ms: 120000
       analysis-timeout-ms: 90000
-      max-dispatch-retry: 8
       max-execute-retry: 3
-      publisher-confirm-timeout-ms: 3000
+    stream:
+      key: ${AI_REDIS_STREAM_KEY:myoj:ai:feedback:stream}
+      group: ${AI_REDIS_STREAM_GROUP:myoj-ai-feedback}
+      consumer-prefix: ${AI_REDIS_CONSUMER_PREFIX:${HOSTNAME:ai-service}}
+      concurrency: 2
+      max-length: 10000
+      reclaim-batch-size: 20
+      ensure-group-interval-ms: 30000
     rate-limit:
       per-user-per-hour: 10
 

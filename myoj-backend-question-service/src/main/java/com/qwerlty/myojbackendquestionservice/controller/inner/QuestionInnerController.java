@@ -7,12 +7,16 @@ import com.qwerlty.myojbackendcommon.common.ErrorCode;
 import com.qwerlty.myojbackendcommon.common.ResultUtils;
 import com.qwerlty.myojbackendcommon.exception.BusinessException;
 import com.qwerlty.myojbackendmodel.model.dto.questionsubmit.QuestionSubmitQueryDTO;
+import com.qwerlty.myojbackendmodel.model.dto.judge.JudgeTaskClaimRequest;
+import com.qwerlty.myojbackendmodel.model.dto.judge.JudgeTaskCompleteRequest;
+import com.qwerlty.myojbackendmodel.model.dto.judge.JudgeTaskRetryRequest;
 import com.qwerlty.myojbackendmodel.model.entity.Question;
 import com.qwerlty.myojbackendmodel.model.entity.QuestionSubmit;
 import com.qwerlty.myojbackendmodel.model.enums.QuestionSubmitStatusEnum;
 import com.qwerlty.myojbackendquestionservice.model.dto.AiSubmissionContextDTO;
 import com.qwerlty.myojbackendquestionservice.model.dto.AiSubmissionHistoryDTO;
 import com.qwerlty.myojbackendquestionservice.service.QuestionService;
+import com.qwerlty.myojbackendquestionservice.service.JudgeTaskCoordinator;
 import com.qwerlty.myojbackendquestionservice.service.QuestionSubmitService;
 import com.qwerlty.myojbackendserviceclient.client.QuestionFeignClient;
 import org.apache.commons.lang3.StringUtils;
@@ -40,6 +44,9 @@ public class QuestionInnerController implements QuestionFeignClient {
 
     @Resource
     private QuestionSubmitService questionSubmitService;
+
+    @Resource
+    private JudgeTaskCoordinator judgeTaskCoordinator;
 
     @Value("${myoj.ai.internal-token:}")
     private String aiInternalToken;
@@ -166,6 +173,7 @@ public class QuestionInnerController implements QuestionFeignClient {
         if (questionSubmitQueryDTO.getQuestionId()!=null){
             submitQueryWrapper.eq("questionId", questionSubmitQueryDTO.getQuestionId());
         }
+        submitQueryWrapper.orderByDesc("createTime", "id");
         return questionSubmitService.list(submitQueryWrapper);
     }
 
@@ -200,29 +208,36 @@ public class QuestionInnerController implements QuestionFeignClient {
     }
 
     @Override
-    @PostMapping("/question_submit/update/id")
-    public Boolean updateQuestionSubmitById(@RequestBody QuestionSubmit questionSubmit) {
-        if (questionSubmit == null || questionSubmit.getId() == null) {
+    @PostMapping("/question_submit/judge/claim")
+    public Boolean claimJudgeTask(@RequestBody JudgeTaskClaimRequest request) {
+        if (!validAttempt(request == null ? null : request.getSubmissionId(),
+                request == null ? null : request.getJudgeAttempt())) {
             return false;
         }
-        Integer status = questionSubmit.getStatus();
-        if (status == null) {
+        return judgeTaskCoordinator.claim(request.getSubmissionId(), request.getJudgeAttempt());
+    }
+
+    @Override
+    @PostMapping("/question_submit/judge/complete")
+    public Boolean completeJudgeTask(@RequestBody JudgeTaskCompleteRequest request) {
+        if (request == null || !validAttempt(request.getSubmissionId(), request.getJudgeAttempt())) {
             return false;
         }
-        // 只允许合法状态流转，避免重复消费/并发写错状态
-        if (QuestionSubmitStatusEnum.RUNNING.getValue().equals(status)) {
-            return questionSubmitService.claimForJudge(questionSubmit.getId());
+        return judgeTaskCoordinator.complete(request);
+    }
+
+    @Override
+    @PostMapping("/question_submit/judge/retry")
+    public Boolean retryJudgeTask(@RequestBody JudgeTaskRetryRequest request) {
+        if (request == null || !validAttempt(request.getSubmissionId(), request.getJudgeAttempt())) {
+            return false;
         }
-        if (QuestionSubmitStatusEnum.SUCCEED.getValue().equals(status)
-                || QuestionSubmitStatusEnum.FAILED.getValue().equals(status)) {
-            return questionSubmitService.finishFromRunning(
-                    questionSubmit.getId(),
-                    status,
-                    questionSubmit.getJudgeInfo(),
-                    questionSubmit.getLastError()
-            );
-        }
-        return questionSubmitService.updateById(questionSubmit);
+        return judgeTaskCoordinator.scheduleRetry(
+                request.getSubmissionId(), request.getJudgeAttempt(), request.getLastError());
+    }
+
+    private boolean validAttempt(Long submissionId, Integer judgeAttempt) {
+        return submissionId != null && submissionId > 0 && judgeAttempt != null && judgeAttempt > 0;
     }
     @Override
     @PostMapping("/question/update/id")

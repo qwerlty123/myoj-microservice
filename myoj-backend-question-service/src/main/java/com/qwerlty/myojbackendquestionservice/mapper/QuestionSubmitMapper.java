@@ -35,13 +35,15 @@ public interface QuestionSubmitMapper extends BaseMapper<QuestionSubmit> {
     @Select("SELECT count(DISTINCT questionId) FROM question_submit WHERE userId = #{userId} AND status = 2 AND isDelete = 0")
     Integer getSolvedCount(@Param("userId")long userId);
 
-    @Update("UPDATE question_submit SET status = 1, updateTime = NOW() " +
-            "WHERE id = #{id} AND status = 0 AND isDelete = 0")
-    int claimForJudge(@Param("id") Long id);
+    @Update("UPDATE question_submit SET status = 1, nextRetryTime = NULL, updateTime = NOW() " +
+            "WHERE id = #{id} AND status = 0 AND judgeAttempt = #{judgeAttempt} AND isDelete = 0")
+    int claimForJudge(@Param("id") Long id, @Param("judgeAttempt") Integer judgeAttempt);
 
-    @Update("UPDATE question_submit SET status = #{status}, judgeInfo = #{judgeInfo}, lastError = #{lastError}, updateTime = NOW() " +
-            "WHERE id = #{id} AND status = 1 AND isDelete = 0")
+    @Update("UPDATE question_submit SET status = #{status}, judgeInfo = #{judgeInfo}, lastError = #{lastError}, " +
+            "nextRetryTime = NULL, updateTime = NOW() " +
+            "WHERE id = #{id} AND status = 1 AND judgeAttempt = #{judgeAttempt} AND isDelete = 0")
     int finishFromRunning(@Param("id") Long id,
+                          @Param("judgeAttempt") Integer judgeAttempt,
                           @Param("status") Integer status,
                           @Param("judgeInfo") String judgeInfo,
                           @Param("lastError") String lastError);
@@ -49,22 +51,25 @@ public interface QuestionSubmitMapper extends BaseMapper<QuestionSubmit> {
     @Select("SELECT * FROM question_submit WHERE status = 1 AND isDelete = 0 AND updateTime < #{deadline} ORDER BY updateTime ASC LIMIT #{limit}")
     List<QuestionSubmit> listTimeoutRunning(@Param("deadline") Date deadline, @Param("limit") int limit);
 
-    @Select("SELECT * FROM question_submit WHERE status = 0 AND isDelete = 0 AND createTime < #{deadline} ORDER BY createTime ASC LIMIT #{limit}")
-    List<QuestionSubmit> listStuckWaiting(@Param("deadline") Date deadline, @Param("limit") int limit);
-
-    @Update("UPDATE question_submit SET status = 0, retryCount = retryCount + 1, nextRetryTime = #{nextRetryTime}, " +
-            "lastError = #{lastError}, updateTime = NOW() WHERE id = #{id} AND status = 1 AND isDelete = 0")
+    @Update("UPDATE question_submit SET status = 0, retryCount = retryCount + 1, judgeAttempt = judgeAttempt + 1, " +
+            "nextRetryTime = #{nextRetryTime}, lastError = #{lastError}, updateTime = NOW() " +
+            "WHERE id = #{id} AND status = 1 AND judgeAttempt = #{judgeAttempt} " +
+            "AND retryCount < #{maxRetry} AND isDelete = 0")
     int retryRunningAsWaiting(@Param("id") Long id,
+                              @Param("judgeAttempt") Integer judgeAttempt,
+                              @Param("maxRetry") Integer maxRetry,
                               @Param("nextRetryTime") Date nextRetryTime,
                               @Param("lastError") String lastError);
 
-    @Update("UPDATE question_submit SET status = 3, judgeInfo = #{judgeInfo}, lastError = #{lastError}, updateTime = NOW() " +
-            "WHERE id = #{id} AND status IN (0, 1) AND isDelete = 0")
-    int markFailedIfUnfinished(@Param("id") Long id,
-                               @Param("judgeInfo") String judgeInfo,
-                               @Param("lastError") String lastError);
+    @Update("UPDATE question_submit SET status = 3, judgeInfo = #{judgeInfo}, lastError = #{lastError}, " +
+            "nextRetryTime = NULL, updateTime = NOW() " +
+            "WHERE id = #{id} AND status = 1 AND judgeAttempt = #{judgeAttempt} " +
+            "AND retryCount >= #{maxRetry} AND isDelete = 0")
+    int markFailedAfterRetryExhausted(@Param("id") Long id,
+                                      @Param("judgeAttempt") Integer judgeAttempt,
+                                      @Param("maxRetry") Integer maxRetry,
+                                      @Param("judgeInfo") String judgeInfo,
+                                      @Param("lastError") String lastError);
 }
-
-
 
 

@@ -59,6 +59,17 @@ spring:
     port: 5672
     username: admin
     password: adgjl08642
+    listener:
+      simple:
+        acknowledge-mode: auto
+        prefetch: 1
+        default-requeue-rejected: false
+        retry:
+          enabled: true
+          max-attempts: 3
+          initial-interval: 1000ms
+          multiplier: 2
+          max-interval: 5000ms
 server:
   address: 0.0.0.0
   port: 8104

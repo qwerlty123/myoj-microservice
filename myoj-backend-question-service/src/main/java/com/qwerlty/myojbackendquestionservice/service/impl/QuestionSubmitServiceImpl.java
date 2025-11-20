@@ -16,9 +16,8 @@ import com.qwerlty.myojbackendmodel.model.entity.User;
 import com.qwerlty.myojbackendmodel.model.enums.QuestionSubmitLanguageEnum;
 import com.qwerlty.myojbackendmodel.model.enums.QuestionSubmitStatusEnum;
 import com.qwerlty.myojbackendmodel.model.vo.*;
-import com.qwerlty.myojbackendquestionservice.mapper.JudgeTaskOutboxMapper;
 import com.qwerlty.myojbackendquestionservice.mapper.QuestionSubmitMapper;
-import com.qwerlty.myojbackendquestionservice.model.entity.JudgeTaskOutbox;
+import com.qwerlty.myojbackendquestionservice.service.JudgeTaskCoordinator;
 import com.qwerlty.myojbackendquestionservice.service.QuestionService;
 import com.qwerlty.myojbackendquestionservice.service.QuestionSubmitService;
 import com.qwerlty.myojbackendserviceclient.client.UserFeignClient;
@@ -55,7 +54,7 @@ public class QuestionSubmitServiceImpl extends ServiceImpl<QuestionSubmitMapper,
     private QuestionSubmitMapper questionSubmitMapper;
 
     @Resource
-    private JudgeTaskOutboxMapper judgeTaskOutboxMapper;
+    private JudgeTaskCoordinator judgeTaskCoordinator;
 
     /**
      * 提交题目
@@ -90,6 +89,7 @@ public class QuestionSubmitServiceImpl extends ServiceImpl<QuestionSubmitMapper,
         questionSubmit.setLanguage(language);
         // 设置初始状态
         questionSubmit.setStatus(QuestionSubmitStatusEnum.WAITING.getValue());
+        questionSubmit.setJudgeAttempt(1);
         questionSubmit.setRetryCount(0);
         questionSubmit.setNextRetryTime(new Date());
         questionSubmit.setJudgeInfo("{}");
@@ -97,16 +97,7 @@ public class QuestionSubmitServiceImpl extends ServiceImpl<QuestionSubmitMapper,
         if (!save) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "数据插入失败");
         }
-        JudgeTaskOutbox outbox = new JudgeTaskOutbox();
-        outbox.setQuestionSubmitId(questionSubmit.getId());
-        outbox.setPayload(String.valueOf(questionSubmit.getId()));
-        outbox.setStatus(0);
-        outbox.setRetryCount(0);
-        outbox.setNextRetryTime(new Date());
-        int inserted = judgeTaskOutboxMapper.insert(outbox);
-        if (inserted <= 0) {
-            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "判题消息入外盒失败");
-        }
+        judgeTaskCoordinator.createInitialTask(questionSubmit.getId(), questionSubmit.getJudgeAttempt());
         return questionSubmit.getId();
     }
 
@@ -252,36 +243,10 @@ public class QuestionSubmitServiceImpl extends ServiceImpl<QuestionSubmitMapper,
     }
 
     @Override
-    public boolean claimForJudge(Long questionSubmitId) {
-        return questionSubmitMapper.claimForJudge(questionSubmitId) > 0;
-    }
-
-    @Override
-    public boolean finishFromRunning(Long questionSubmitId, Integer status, String judgeInfo, String lastError) {
-        return questionSubmitMapper.finishFromRunning(questionSubmitId, status, judgeInfo, lastError) > 0;
-    }
-
-    @Override
     public List<QuestionSubmit> listTimeoutRunning(Date deadline, int limit) {
         return questionSubmitMapper.listTimeoutRunning(deadline, limit);
     }
-
-    @Override
-    public List<QuestionSubmit> listStuckWaiting(Date deadline, int limit) {
-        return questionSubmitMapper.listStuckWaiting(deadline, limit);
-    }
-
-    @Override
-    public boolean retryRunningAsWaiting(Long questionSubmitId, Date nextRetryTime, String lastError) {
-        return questionSubmitMapper.retryRunningAsWaiting(questionSubmitId, nextRetryTime, lastError) > 0;
-    }
-
-    @Override
-    public boolean markFailedIfUnfinished(Long questionSubmitId, String judgeInfo, String lastError) {
-        return questionSubmitMapper.markFailedIfUnfinished(questionSubmitId, judgeInfo, lastError) > 0;
-    }
 }
-
 
 
 

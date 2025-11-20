@@ -1,9 +1,9 @@
-# myoj 判题链路的 RabbitMQ / Transactional Outbox 改进建议
+# myoj 判题链路的 RabbitMQ / Transactional Outbox 改进设计
 
 > 调研日期：2026-08-10  
 > 范围：只讨论 `question_submit -> judge_task_outbox -> RabbitMQ -> judge consumer -> sandbox -> question_submit`；不讨论 AI Feedback 链路。  
 > 资料口径：技术结论以 RabbitMQ、Spring AMQP、Spring Boot、MySQL、Debezium 等官方文档/官方源码为依据；用户提供的腾讯云文章只作为候选方案进行校验。  
-> 说明：本文是架构审查与改造建议，没有修改生产代码。
+> 说明：本文先记录改造前的架构审查，再给出目标设计。2026-08-10 已按第一、二阶段的核心方案完成生产代码实现；第 4 节的“当前”均指改造前基线。AI 链路不在本文与本次实现范围内。
 
 ## 1. 结论先行
 
@@ -51,14 +51,14 @@ publisher confirm 与 consumer acknowledgement 是彼此独立的两段确认：
 
 > MQ 保证判题端到端 exactly-once，或 publisher confirm 代表判题已经完成。
 
-## 4. 当前实现审查
+## 4. 改造前实现审查
 
 ### 4.1 已经正确、应保留的部分
 
 - [`QuestionSubmitServiceImpl`](../../myoj-backend-question-service/src/main/java/com/qwerlty/myojbackendquestionservice/service/impl/QuestionSubmitServiceImpl.java) 的 `doQuestionSubmit()` 在一个 `@Transactional` 方法里同时写 `question_submit` 与 `judge_task_outbox`，消除了最关键的“业务提交成功但任务没有持久记录”窗口。
 - [`JudgeOutboxDispatchTask`](../../myoj-backend-question-service/src/main/java/com/qwerlty/myojbackendquestionservice/job/JudgeOutboxDispatchTask.java) 使用状态 CAS 领取 Outbox，多个 question-service 实例不会在正常情况下同时领取同一行。
 - [`QuestionSubmitMapper`](../../myoj-backend-question-service/src/main/java/com/qwerlty/myojbackendquestionservice/mapper/QuestionSubmitMapper.java) 用 `WAITING -> RUNNING` 条件更新领取判题任务，重复消息通常只有一个能首次执行。
-- [`RabbitmqConsumer`](../../myoj-backend-judge-service/src/main/java/com/qwerlty/myojbackendjudgeservice/judge/mq/RabbitmqConsumer.java) 使用手动 ACK，并在判题结果落库后才 ACK，方向正确。RabbitMQ 官方要求消费者完成记录、转发或其他责任转移后再 ACK。[RabbitMQ Reliability Guide](https://www.rabbitmq.com/docs/reliability#acknowledgements-and-confirms)
+- [`RabbitmqConsumer`](../../myoj-backend-judge-service/src/main/java/com/qwerlty/myojbackendjudgeservice/judge/mq/RabbitmqConsumer.java) 在判题结果落库后才 ACK，确认时机方向正确；但当前同步 listener 没有必须手工操作 `Channel` 的理由，可以进一步交给 Spring container 统一确认。RabbitMQ 官方要求消费者完成记录、转发或其他责任转移后再 ACK。[RabbitMQ Reliability Guide](https://www.rabbitmq.com/docs/reliability#acknowledgements-and-confirms)
 - [`RabbitMqConfig`](../../myoj-backend-judge-service/src/main/java/com/qwerlty/myojbackendjudgeservice/judge/mq/RabbitMqConfig.java) 声明了 durable exchange/queue 和 DLQ，至少具备基础持久拓扑。
 
 ### 4.2 P0：Outbox 的“已发送”判定不成立
@@ -87,6 +87,8 @@ PENDING -> DISPATCHING
 
 即使 broker 已接收，但应用在写 `SENT` 前崩溃，恢复后仍会重复发布。这不是实现错误，而是 Transactional Outbox 的固有 at-least-once 窗口，所以 message ID 和消费幂等不可省略。
 
+当前 Outbox 的 lease 也不完整：`markRetryOrStop()` 只按 `id` 更新，没有 `status=DISPATCHING` 或本次领取 token 条件；`releaseStaleDispatching()` 又会把超时行直接改回 PENDING。于是旧 dispatcher 在 lease 被释放、同一行被新 dispatcher 重新领取后，仍可能用一次迟到的失败回调把新状态覆盖成 PENDING/STOP。`markSent()` 虽有 `status=DISPATCHING` 条件，但也无法区分这次 DISPATCHING 属于哪个 dispatcher。目标实现应给每次领取生成 `lockToken`（或至少 `lockedBy + lockedUntil/version`），所有 SENT/重试更新都使用 `WHERE id=? AND status=DISPATCHING AND lockToken=?`；受影响行为 0 时说明自己已失去 lease，不再改状态。
+
 ### 4.3 P0：`WAITING` 补偿会放大消息
 
 [`JudgeConsistencyCompensationTask`](../../myoj-backend-question-service/src/main/java/com/qwerlty/myojbackendquestionservice/job/JudgeConsistencyCompensationTask.java) 对所有创建超过 60 秒的 WAITING 提交调用 `countActiveDispatchBySubmitId()`；该查询只计算 Outbox 状态 `0/PENDING` 和 `3/DISPATCHING`，不计算 `1/SENT`。
@@ -97,7 +99,7 @@ PENDING -> DISPATCHING
 
 - 删除“仅因 WAITING 超过固定时间就重新造消息”的正常补偿路径；
 - 改成不变量审计：当前 `submissionId + judgeAttempt` 是否存在任意 Outbox 事件；有 SENT 事件时依赖 durable queue + persistent message + confirm，不重复发布；
-- 若确实需要人工重驱，创建新的、显式递增 `judgeAttempt`，而不是复制同一轮事件；
+- 若只是发布阶段需要人工重驱，重放同一个 Outbox/message ID；只有已经开始执行后的业务重试或超时恢复，才递增 `judgeAttempt` 并创建下一轮事件；
 - 为 `(questionSubmitId, judgeAttempt, eventType)` 建唯一索引，阻止多实例补偿的 `count -> insert` 竞态。
 
 ### 4.4 P0：状态 CAS 不是完整幂等，缺少 fencing token
@@ -114,10 +116,10 @@ attempt 1: 晚到的结果执行 WHERE status=RUNNING，成功写入
 
 旧 worker 无法知道当前 `RUNNING` 已经属于 attempt 2。解决方式是在 `question_submit` 增加单调递增的 `judgeAttempt`（或随机 execution token）：
 
-- 领取：`WAITING -> RUNNING, judgeAttempt = judgeAttempt + 1`，返回 attempt；
-- MQ 消息携带 `messageId, submissionId, judgeAttempt`；
+- 创建提交时：在同一事务中把 `question_submit.judgeAttempt` 初始化为 1，并创建 attempt 1 的 Outbox；MQ 消息携带 `messageId, submissionId, judgeAttempt=1`；
+- 领取：仅当 `status=WAITING AND judgeAttempt=消息中的 attempt` 时执行 `WAITING -> RUNNING`，领取本身不递增 attempt；
 - 完成：`WHERE id=? AND status=RUNNING AND judgeAttempt=?`；
-- 超时重置/失败也带 expected attempt；
+- 执行失败重试或超时恢复：校验 expected attempt，在同一本地事务中执行 `RUNNING attempt N -> WAITING attempt N+1`，并插入 attempt N+1 的 Outbox；
 - 受影响行数为 0 代表 stale worker，只记录并 ACK，不得覆盖新结果。
 
 这样保证的是结果落库 effectively-once。sandbox 调用仍可能重复；若以后 sandbox 提供幂等 API，可传 `submissionId:judgeAttempt` 作为请求幂等键，否则接受少量重复执行成本。
@@ -131,12 +133,12 @@ attempt 1: 晚到的结果执行 WHERE status=RUNNING，成功写入
 建议明确区分：
 
 - **瞬时本地失败**：极少量、短退避的 Spring Retry；
-- **依赖不可用/需要稍后重试**：进入专用 retry queue，使用 TTL + DLX 延迟回正常队列，或由数据库任务状态安排新的 attempt；不要 `requeue=true` 形成热循环。RabbitMQ 官方说明消息 TTL 到期可以 dead-letter，适合构造延迟 retry queue。[RabbitMQ TTL](https://www.rabbitmq.com/docs/ttl)、[Spring AMQP Retry/Recoverer](https://docs.spring.io/spring-amqp/reference/amqp/resilience-recovering-from-errors-and-broker-failures.html)
+- **依赖不可用/需要稍后重试**：进入专用 retry queue，使用 TTL + DLX 延迟回正常队列，或由数据库任务状态安排新的 attempt；不要 `requeue=true` 形成热循环。RabbitMQ 官方说明消息 TTL 到期可以 dead-letter，适合构造延迟 retry queue。[RabbitMQ TTL](https://www.rabbitmq.com/docs/ttl)、[Spring AMQP Retry/Recoverer](https://docs.spring.io/spring-amqp/reference/amqp/resilience-recovering-from-errors-and-broker-failures.html) 但官方也提醒：默认 DLX 内部重发布没有 publisher confirm，目标队列不可用时可能丢失；若把 retry 本身也视为不可丢，需要 quorum queue 的 at-least-once dead-lettering，或改用带 confirm 的应用/Outbox 重发。[RabbitMQ DLX Safety](https://www.rabbitmq.com/docs/dlx#safety)
 - **不可恢复消息**（格式错误、提交不存在等）：reject/no-requeue 到 terminal DLQ；
 - **重复/已完成/stale attempt**：ACK，因为目标业务效果已经完成或该 delivery 已失效；
 - **DLQ**：停车场和人工/受控重放入口，不是自动无限重试队列。
 
-不要在 listener 中“手工 nack 后又把同一个异常重新抛给 container”形成两个确认责任方。要么 listener 明确 ACK/NACK 后正常返回，要么让 container + retry advice 统一决定。Spring 官方说明 listener 异常、`defaultRequeueRejected`、`AmqpRejectAndDontRequeueException` 与 recoverer 会共同影响 requeue/DLX 行为，必须选择一个控制点。[Spring AMQP Exception Handling](https://docs.spring.io/spring-amqp/reference/amqp/exception-handling.html)
+不要在 listener 中“手工 nack 后又把同一个异常重新抛给 container”形成两个确认责任方。要么 listener 明确 ACK/NACK 后正常返回，要么让 container + retry advice 统一决定。对当前同步判题 listener，更推荐 Spring `AcknowledgeMode.AUTO`：方法正常返回时由 container ACK，抛异常时由统一的 retry/error handler 决定 requeue 或 DLQ。这里的 `AUTO` 不是 RabbitMQ 原生的无确认模式；Spring 把原生 `autoAck=true` 称为 `NONE`。[Spring AMQP `AcknowledgeMode`](https://docs.spring.io/spring-amqp/docs/2.4.17/api/org/springframework/amqp/core/AcknowledgeMode.html) Spring 官方也说明 listener 异常、`defaultRequeueRejected`、`AmqpRejectAndDontRequeueException` 与 recoverer 会共同影响 requeue/DLX 行为，必须选择一个控制点。[Spring AMQP Exception Handling](https://docs.spring.io/spring-amqp/reference/amqp/exception-handling.html)
 
 ### 4.6 P1：Outbox 的 `STOP` 实际没有停止
 
@@ -202,7 +204,18 @@ flowchart LR
 | RabbitMQ retry/DLQ | delivery 的短期延迟重试与 terminal parking | 不替代业务状态和超时 lease |
 | stale RUNNING sweeper | 修复 worker 崩溃/永久挂起的业务 lease | 不扫描所有 SENT 事件并盲目重复发布 |
 
-### 5.1 建议的最小消息格式
+### 5.1 建议的模块与 seam
+
+重构不应继续把状态转换、Rabbit channel 操作和补偿判断散落在 scheduler、consumer、mapper 与 Feign controller 中。建议形成两个深模块：
+
+- Question 服务内的 `JudgeTaskCoordinator` 隐藏提交状态、attempt fencing 和“状态变化 + 新 Outbox”本地事务，对远端只暴露 `claim(submissionId, attemptNo)`、`complete(submissionId, attemptNo, verdict)`、`scheduleRetry(submissionId, attemptNo, reason)` 三类接口；
+- Question 服务内的 `JudgeOutboxRelay` 隐藏扫描、lease token、publisher confirm/return、退避和状态更新，scheduler 只调用 `dispatchDue(limit)`；
+- Judge 服务内的 Rabbit listener 只是 adapter：反序列化并调用 `JudgeMessageHandler.handle(command)`。ACK/retry/DLQ 由一个 container 配置统一处理，不把 `Channel` 暴露到判题实现；
+- Judge 服务对 Question 服务的调用定义为 owned-remote port，生产使用 Feign adapter，测试使用内存 adapter。这样故障测试通过同一个接口覆盖 claim、stale completion 和 retry，而不需要逐个 mock mapper/controller。
+
+这些 seam 的目的不是增加抽象层，而是让每种一致性规则只有一个实现位置：发布可靠性集中在 relay，执行一致性集中在 coordinator，Rabbit 只作为传输 adapter。
+
+### 5.2 建议的最小消息格式
 
 当前 payload 只有一个字符串 submit ID，无法携带事件身份和 attempt。建议发送一个很小的、带版本 envelope：
 
@@ -224,7 +237,7 @@ flowchart LR
 
 专用 Outbox 的 exchange/routing key 固定在配置/代码中是合理简化，不必为了“通用消息平台”增加 targetSystem 字段。`payload` 是否保留取决于审计需要：若保留，就必须视为不可变的实际发送快照；若不保留，可由 Outbox 列稳定构建上述 envelope。
 
-### 5.2 建议的 Outbox 领取与 confirm 流程
+### 5.3 建议的 Outbox 领取与 confirm 流程
 
 1. 短事务领取到期事件，状态改为 `DISPATCHING`，记录 `lockedBy/lockedUntil`；
 2. 提交数据库事务，**不要持有数据库锁等待 MQ**；
@@ -236,7 +249,7 @@ flowchart LR
 
 当前“先 SELECT，再逐行 CAS”在小流量下正确但竞争较多，可以继续使用。多实例/高吞吐时再改成 MySQL 8 `FOR UPDATE SKIP LOCKED` 批量领取；官方明确把它列为 queue-like table 降低锁竞争的用途。[MySQL `SKIP LOCKED`](https://dev.mysql.com/doc/refman/8.0/en/select.html)
 
-### 5.3 建议的消费异常决策表
+### 5.4 建议的消费异常决策表
 
 | 情况 | 数据库动作 | MQ 动作 |
 | --- | --- | --- |
@@ -264,7 +277,7 @@ flowchart LR
 
 Debezium 官方 Outbox Event Router 明确要求 connector 只捕获 Outbox 表，并提供事件 ID 供消费者去重；它期望 Outbox 是 INSERT-only，DELETE 会被过滤，UPDATE 被视为异常操作。[Debezium Outbox Event Router](https://debezium.io/documentation/reference/stable/transformations/outbox-event-router.html) Debezium MySQL connector 在异常恢复时提供 at-least-once，而不是免幂等的 exactly-once。[Debezium MySQL Connector](https://debezium.io/documentation/reference/stable/connectors/mysql.html)
 
-Debezium Server 官方已有 RabbitMQ sink 配置及 broker confirm timeout，但引入它仍意味着增加一个独立 CDC 运行时及 offset 管理。[Debezium Server RabbitMQ Sink](https://debezium.io/documentation/reference/stable/operations/debezium-server.html#_rabbitmq_stream)
+Debezium Server 官方已有 RabbitMQ sink 配置及 broker confirm timeout，但引入它仍意味着增加一个独立 CDC 运行时及 offset 管理。[Debezium Server](https://debezium.io/documentation/reference/stable/operations/debezium-server.html)
 
 **本项目现阶段推荐继续轮询**，理由是：
 
@@ -312,9 +325,10 @@ Debezium Server 官方已有 RabbitMQ sink 配置及 broker confirm timeout，�
 1. 消息增加 `messageId + submissionId + judgeAttempt + schemaVersion`；
 2. `question_submit` 增加 `judgeAttempt`，claim/finish/reset 全部校验 expected attempt；
 3. `RabbitmqProducer` 传 `CorrelationData`，Outbox 只在 confirm ACK 且无 return 时 SENT；
-4. 删除 WAITING 超时后基于“没有 PENDING/DISPATCHING”反复造消息的逻辑；
-5. 修正 consumer：明确 duplicate/stale/fatal/transient 分支；不要 nack 后再次抛异常；
-6. 把 stale RUNNING 的重置与新 attempt Outbox 写入放在同一本地事务。
+4. Outbox 领取增加 `lockToken`/version，mark sent、retry、stop 都带 expected token CAS；
+5. 删除 WAITING 超时后基于“没有 PENDING/DISPATCHING”反复造消息的逻辑；
+6. 修正 consumer：明确 duplicate/stale/fatal/transient 分支；不要 nack 后再次抛异常；
+7. 把 stale RUNNING 的重置与新 attempt Outbox 写入放在同一本地事务。
 
 ### 第二阶段：统一重试与运维
 
@@ -339,17 +353,23 @@ Debezium Server 官方已有 RabbitMQ sink 配置及 broker confirm timeout，�
 
 建议监控：Outbox pending 数/最老年龄、dispatching lease 超时数、confirm latency、NACK/return/timeout 计数、队列 ready/unacked、DLQ 深度、WAITING/RUNNING 最老年龄、stale completion 拒绝数、每个 attempt 的 sandbox 时长与重试次数。
 
-## 10. 最终取舍
+## 10. 2026-08-10 实施状态
+
+已实现：版本化消息 envelope、`judgeAttempt` fencing、Outbox 业务唯一键、`lockToken + leaseUntil` 投递租约、persistent/mandatory 发布、confirm ACK + no return 后才标记 SENT、发布退避/死信、执行失败时原子创建下一 attempt、删除 WAITING 盲目重投、Spring AUTO ACK、有限消费重试、DLQ 与 `prefetch=1`。数据库升级见 [`migration_20260810_judge_outbox_v2.sql`](../../sql/migration_20260810_judge_outbox_v2.sql)。
+
+仍属于部署/运维工作，未在本次代码内自动执行：生产数据库迁移、RabbitMQ policy/多节点 quorum 取舍、DLQ 报警与受控 replay runbook、SENT Outbox 归档周期，以及连接真实 MySQL/RabbitMQ 的故障注入测试。
+
+## 11. 最终取舍
 
 对当前 myoj，建议采用：
 
-> **MySQL 本地事务写提交 + 专用轮询 Outbox；RabbitMQ persistent/durable + publisher confirm/return；消费者手动 ACK；`question_submit` 状态机 + `judgeAttempt` fencing；有限延迟重试 + terminal DLQ；仅对 stale RUNNING 做业务补偿。**
+> **MySQL 本地事务写提交 + 专用轮询 Outbox；RabbitMQ persistent/durable + publisher confirm/return；消费者成功后 ACK（同步 listener 优先由 Spring container 管理）；`question_submit` 状态机 + `judgeAttempt` fencing；有限延迟重试 + terminal DLQ；仅对 stale RUNNING 做业务补偿。**
 
 这是一条 at-least-once 的可靠任务链路，通过幂等和 fencing 获得结果落库的 effectively-once。它保留现有架构投资，修复真正的正确性问题，又避免为一个低到中等规模的判题事件引入 CDC、XA、通用事件平台或多套去重基础设施。
 
 如果未来压测证明 RabbitMQ 本身没有提供必要价值，则应完整切换到 MySQL job queue，而不是同时保留 `question_submit` 扫描、Outbox 扫描、RabbitMQ retry 和补偿扫描四套近似队列。
 
-## 11. 一手资料索引
+## 12. 一手资料索引
 
 - [RabbitMQ Reliability Guide](https://www.rabbitmq.com/docs/reliability)
 - [RabbitMQ Consumer Acknowledgements and Publisher Confirms](https://www.rabbitmq.com/docs/confirms)
@@ -361,6 +381,7 @@ Debezium Server 官方已有 RabbitMQ sink 配置及 broker confirm timeout，�
 - [Spring AMQP Transactions](https://docs.spring.io/spring-amqp/reference/amqp/transactions.html)
 - [Spring AMQP Exception Handling](https://docs.spring.io/spring-amqp/reference/amqp/exception-handling.html)
 - [Spring AMQP Retry and Recovery](https://docs.spring.io/spring-amqp/reference/amqp/resilience-recovering-from-errors-and-broker-failures.html)
+- [Spring AMQP 2.4 `AcknowledgeMode`](https://docs.spring.io/spring-amqp/docs/2.4.17/api/org/springframework/amqp/core/AcknowledgeMode.html)
 - [Spring AMQP 2.4 `CorrelationData` API](https://docs.spring.io/spring-amqp/docs/2.4.17/api/org/springframework/amqp/rabbit/connection/CorrelationData.html)
 - [Spring Boot 2.6.13 `RabbitTemplateConfigurer` source](https://github.com/spring-projects/spring-boot/blob/v2.6.13/spring-boot-project/spring-boot-autoconfigure/src/main/java/org/springframework/boot/autoconfigure/amqp/RabbitTemplateConfigurer.java)
 - [MySQL 8.0 `SELECT ... SKIP LOCKED`](https://dev.mysql.com/doc/refman/8.0/en/select.html)
@@ -368,4 +389,3 @@ Debezium Server 官方已有 RabbitMQ sink 配置及 broker confirm timeout，�
 - [Debezium MySQL Connector](https://debezium.io/documentation/reference/stable/connectors/mysql.html)
 - [Debezium Server](https://debezium.io/documentation/reference/stable/operations/debezium-server.html)
 - [AWS Prescriptive Guidance: Transactional Outbox](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html)
-

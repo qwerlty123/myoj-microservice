@@ -5,6 +5,9 @@ import com.qwerlty.myojbackendjudgeservice.judge.codesandbox.CodeSandbox;
 import com.qwerlty.myojbackendjudgeservice.judge.codesandbox.CodeSandboxFactory;
 import com.qwerlty.myojbackendmodel.model.codesandbox.ExecuteCodeResponse;
 import com.qwerlty.myojbackendmodel.model.codesandbox.JudgeInfo;
+import com.qwerlty.myojbackendmodel.model.dto.judge.JudgeTaskCompleteRequest;
+import com.qwerlty.myojbackendmodel.model.dto.judge.JudgeTaskMessage;
+import com.qwerlty.myojbackendmodel.model.dto.judge.JudgeTaskRetryRequest;
 import com.qwerlty.myojbackendmodel.model.entity.Question;
 import com.qwerlty.myojbackendmodel.model.entity.QuestionSubmit;
 import com.qwerlty.myojbackendmodel.model.enums.JudgeInfoMessageEnum;
@@ -20,7 +23,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Collections;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -33,6 +35,7 @@ import static org.mockito.Mockito.when;
 class JudgeServiceImplTest {
 
     private static final long SUBMIT_ID = 101L;
+    private static final int ATTEMPT = 1;
 
     @Mock
     private QuestionFeignClient questionFeignClient;
@@ -56,7 +59,8 @@ class JudgeServiceImplTest {
 
     @Test
     void timeoutFromSandboxIsPersistedAsTimeLimitExceeded() {
-        prepareSubmission("[{\"input\":\"21\",\"output\":\"42\"}]", QuestionSubmitStatusEnum.SUCCEED);
+        prepareSubmission("[{\"input\":\"21\",\"output\":\"42\"}]", QuestionSubmitStatusEnum.SUCCEED, ATTEMPT);
+        when(questionFeignClient.completeJudgeTask(any())).thenReturn(true);
         JudgeInfo sandboxJudgeInfo = new JudgeInfo();
         sandboxJudgeInfo.setMessage("Time Limit Exceeded");
         sandboxJudgeInfo.setTime(5_000L);
@@ -68,51 +72,65 @@ class JudgeServiceImplTest {
                 .judgeInfo(sandboxJudgeInfo)
                 .build());
 
-        judgeService.doJudge(SUBMIT_ID);
+        judgeService.doJudge(message());
 
-        QuestionSubmit terminalUpdate = terminalUpdate();
-        JudgeInfo persisted = JSONUtil.toBean(terminalUpdate.getJudgeInfo(), JudgeInfo.class);
-        assertEquals(QuestionSubmitStatusEnum.SUCCEED.getValue(), terminalUpdate.getStatus());
+        JudgeTaskCompleteRequest completion = completion();
+        JudgeInfo persisted = JSONUtil.toBean(completion.getJudgeInfo(), JudgeInfo.class);
+        assertEquals(QuestionSubmitStatusEnum.SUCCEED.getValue(), completion.getStatus());
+        assertEquals(ATTEMPT, completion.getJudgeAttempt());
         assertEquals(JudgeInfoMessageEnum.TIME_LIMIT_EXCEEDED.getValue(), persisted.getMessage());
         assertEquals(5_000L, persisted.getTime());
     }
 
     @Test
-    void sandboxTransportFailureMovesSubmissionOutOfRunningState() {
-        prepareSubmission("[{\"input\":\"\",\"output\":\"1\"}]", QuestionSubmitStatusEnum.FAILED);
+    void sandboxTransportFailureSchedulesNextAttempt() {
+        prepareSubmission("[{\"input\":\"\",\"output\":\"1\"}]", QuestionSubmitStatusEnum.WAITING, ATTEMPT + 1);
         when(codeSandboxFactory.newInstance("remote")).thenReturn(codeSandbox);
         when(codeSandbox.executeCode(any())).thenThrow(new IllegalStateException("connection refused"));
+        when(questionFeignClient.retryJudgeTask(any())).thenReturn(true);
 
-        judgeService.doJudge(SUBMIT_ID);
+        QuestionSubmit result = judgeService.doJudge(message());
 
-        QuestionSubmit terminalUpdate = terminalUpdate();
-        assertEquals(QuestionSubmitStatusEnum.FAILED.getValue(), terminalUpdate.getStatus());
-        assertTrue(terminalUpdate.getLastError().contains("connection refused"));
+        ArgumentCaptor<JudgeTaskRetryRequest> captor = ArgumentCaptor.forClass(JudgeTaskRetryRequest.class);
+        verify(questionFeignClient).retryJudgeTask(captor.capture());
+        assertEquals(ATTEMPT, captor.getValue().getJudgeAttempt());
+        assertTrue(captor.getValue().getLastError().contains("connection refused"));
+        assertEquals(QuestionSubmitStatusEnum.WAITING.getValue(), result.getStatus());
+        assertEquals(ATTEMPT + 1, result.getJudgeAttempt());
+        verify(questionFeignClient, never()).completeJudgeTask(any());
     }
 
     @Test
     void emptyQuestionCasesFailWithoutCallingSandbox() {
-        prepareSubmission("[]", QuestionSubmitStatusEnum.FAILED);
+        prepareSubmission("[]", QuestionSubmitStatusEnum.FAILED, ATTEMPT);
+        when(questionFeignClient.completeJudgeTask(any())).thenReturn(true);
 
-        judgeService.doJudge(SUBMIT_ID);
+        judgeService.doJudge(message());
 
-        QuestionSubmit terminalUpdate = terminalUpdate();
-        assertEquals(QuestionSubmitStatusEnum.FAILED.getValue(), terminalUpdate.getStatus());
-        assertTrue(terminalUpdate.getLastError().contains("测试用例"));
+        JudgeTaskCompleteRequest completion = completion();
+        assertEquals(QuestionSubmitStatusEnum.FAILED.getValue(), completion.getStatus());
+        assertEquals(ATTEMPT, completion.getJudgeAttempt());
+        assertTrue(completion.getLastError().contains("测试用例"));
         verify(codeSandboxFactory, never()).newInstance(any());
     }
 
-    private void prepareSubmission(String judgeCases, QuestionSubmitStatusEnum finalStatus) {
-        QuestionSubmit initial = new QuestionSubmit();
-        initial.setId(SUBMIT_ID);
-        initial.setQuestionId(202L);
-        initial.setStatus(QuestionSubmitStatusEnum.WAITING.getValue());
-        initial.setLanguage("java");
-        initial.setCode("public class Main { public static void main(String[] args) {} }");
+    @Test
+    void staleAttemptDoesNotClaimOrExecute() {
+        QuestionSubmit current = submission(QuestionSubmitStatusEnum.WAITING, ATTEMPT + 1);
+        when(questionFeignClient.getQuestionSubmitById(SUBMIT_ID)).thenReturn(current);
 
-        QuestionSubmit finished = new QuestionSubmit();
-        finished.setId(SUBMIT_ID);
-        finished.setStatus(finalStatus.getValue());
+        QuestionSubmit result = judgeService.doJudge(message());
+
+        assertEquals(ATTEMPT + 1, result.getJudgeAttempt());
+        verify(questionFeignClient, never()).claimJudgeTask(any());
+        verify(codeSandboxFactory, never()).newInstance(any());
+    }
+
+    private void prepareSubmission(String judgeCases,
+                                   QuestionSubmitStatusEnum finalStatus,
+                                   int finalAttempt) {
+        QuestionSubmit initial = submission(QuestionSubmitStatusEnum.WAITING, ATTEMPT);
+        QuestionSubmit finished = submission(finalStatus, finalAttempt);
 
         Question question = new Question();
         question.setId(202L);
@@ -121,14 +139,33 @@ class JudgeServiceImplTest {
 
         when(questionFeignClient.getQuestionSubmitById(SUBMIT_ID)).thenReturn(initial, finished);
         when(questionFeignClient.getQuestionById(202L)).thenReturn(question);
-        when(questionFeignClient.updateQuestionSubmitById(any())).thenReturn(true);
+        when(questionFeignClient.claimJudgeTask(any())).thenReturn(true);
     }
 
-    private QuestionSubmit terminalUpdate() {
-        ArgumentCaptor<QuestionSubmit> captor = ArgumentCaptor.forClass(QuestionSubmit.class);
-        verify(questionFeignClient, org.mockito.Mockito.times(2)).updateQuestionSubmitById(captor.capture());
-        List<QuestionSubmit> updates = captor.getAllValues();
-        assertEquals(QuestionSubmitStatusEnum.RUNNING.getValue(), updates.get(0).getStatus());
-        return updates.get(1);
+    private QuestionSubmit submission(QuestionSubmitStatusEnum status, int attempt) {
+        QuestionSubmit submission = new QuestionSubmit();
+        submission.setId(SUBMIT_ID);
+        submission.setQuestionId(202L);
+        submission.setStatus(status.getValue());
+        submission.setJudgeAttempt(attempt);
+        submission.setLanguage("java");
+        submission.setCode("public class Main { public static void main(String[] args) {} }");
+        return submission;
+    }
+
+    private JudgeTaskMessage message() {
+        return JudgeTaskMessage.builder()
+                .messageId("event-1")
+                .eventType(JudgeTaskMessage.EVENT_TYPE)
+                .schemaVersion(JudgeTaskMessage.SCHEMA_VERSION)
+                .submissionId(SUBMIT_ID)
+                .judgeAttempt(ATTEMPT)
+                .build();
+    }
+
+    private JudgeTaskCompleteRequest completion() {
+        ArgumentCaptor<JudgeTaskCompleteRequest> captor = ArgumentCaptor.forClass(JudgeTaskCompleteRequest.class);
+        verify(questionFeignClient).completeJudgeTask(captor.capture());
+        return captor.getValue();
     }
 }

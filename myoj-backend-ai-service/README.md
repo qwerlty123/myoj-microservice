@@ -1,6 +1,6 @@
 # MyOJ AI Submission Feedback Service
 
-独立的 Spring Boot 3 / Spring AI 微服务。用户手动创建分析任务，服务通过任务表 Outbox 和 RabbitMQ 异步执行；失败提交生成诊断与三级提示，AC 提交生成复杂度和代码质量复盘。
+独立的 Spring Boot 3 / Spring AI 微服务。用户手动创建分析任务后直接写入 Redis Stream，数据库只保存业务任务状态和历史复盘，不充当本地消息表或 Outbox；失败提交生成诊断与三级提示，AC 提交生成复杂度和代码质量复盘。
 
 ## Architecture
 
@@ -9,10 +9,9 @@ flowchart LR
     U["用户"] --> G["Gateway /api/ai/**"]
     G --> C["AiFeedbackController"]
     C --> S["AiFeedbackService"]
-    S --> DB[("ai_feedback_task / Outbox")]
-    D["DispatchJob"] --> DB
-    D --> MQ["RabbitMQ ai.feedback.queue"]
-    MQ --> W["AiFeedbackConsumer"]
+    S --> DB[("ai_feedback_task")]
+    S -->|"直接 XADD"| RS["Redis Stream"]
+    RS --> W["Consumer Group"]
     W --> S
     S --> Q["Question Service 脱敏接口"]
     S --> M["AiChatManager"]
@@ -38,9 +37,10 @@ Content-Type: application/json
 ```http
 GET /api/ai/feedback/{taskId}
 GET /api/ai/feedback/submission/{submissionId}/latest
+GET /api/ai/feedback/history?current=1&pageSize=10&submissionId=123456
 ```
 
-任务状态为：`PENDING`、`DISPATCHING`、`QUEUED`、`RUNNING`、`SUCCESS`、`FAILED`、`TIMEOUT`。响应保持 `{code,data,message}` 格式。
+历史接口中的 `submissionId` 可省略；省略时返回当前用户跨提交的全部复盘。任务状态为：`PENDING`、`RUNNING`、`SUCCESS`、`FAILED`、`TIMEOUT`。响应保持 `{code,data,message}` 格式。
 
 ## Required configuration
 
@@ -61,7 +61,8 @@ MYSQL_URL=jdbc:mysql://127.0.0.1:3306/myoj
 MYSQL_USERNAME=root
 MYSQL_PASSWORD=replace-me
 REDIS_HOST=127.0.0.1
-RABBITMQ_HOST=127.0.0.1
+AI_REDIS_STREAM_KEY=myoj:ai:feedback:stream
+AI_REDIS_STREAM_GROUP=myoj-ai-feedback
 NACOS_SERVER_ADDR=127.0.0.1:8848
 QDRANT_HOST=127.0.0.1
 QDRANT_GRPC_PORT=6334
@@ -73,11 +74,27 @@ QDRANT_API_KEY=replace-with-the-server-qdrant-api-key
 
 ## Database and knowledge initialization
 
-已有数据库先执行：
+全新数据库执行：
 
 ```bash
 mysql -h 127.0.0.1 -u root -p < sql/migration_20260810_ai_feedback.sql
 ```
+
+已经运行过 RabbitMQ 版本时执行保留历史记录的迁移：
+
+```bash
+mysql -h 127.0.0.1 -u root -p < sql/migration_20260811_ai_feedback_redis_stream.sql
+```
+
+迁移会保留已有成功、失败、超时任务和合法的结构化结果。旧链路中尚未完成的 `PENDING/DISPATCHING/QUEUED/RUNNING` 任务会转为可手动重试的 `FAILED`，不会再依赖数据库扫描补投。
+
+如果已经执行过早期带 `availableTime`、`idx_status_availableTime` 的 Redis Stream 迁移，不要再次运行上面的全量迁移；停止 AI Service 后只执行增量脚本：
+
+```bash
+mysql -h 127.0.0.1 -u root -p < sql/migration_20260811_02_ai_feedback_direct_stream.sql
+```
+
+该脚本可重复执行，会保留历史结果，仅移除数据库扫描调度字段并补齐直接 Stream 版本所需索引。
 
 首次创建某个知识库版本时设置 `AI_KNOWLEDGE_INITIALIZE=true`。Spring AI 会先创建 `myoj_knowledge_{version}` collection，随后服务按版本、`docId`、分块序号和内容哈希生成确定性 UUID，幂等写入 `src/main/resources/knowledge` 下的 30 篇知识卡。导入完成后的常规启动应改回 `false`，避免每次启动重复执行导入流程。
 
@@ -99,7 +116,7 @@ GET /api/ai/actuator/health
 GET /api/ai/actuator/prometheus
 ```
 
-关键自定义指标覆盖任务创建/完成、排队耗时、模型耗时、Token、重试次数、RAG 文档数和工具调用次数。Spring AI observation 的内容采集保持关闭，日志不得打印代码、Prompt、工具结果、模型原文或 API Key。
+关键自定义指标覆盖 Redis Stream 直接入队/消费、任务创建/完成、排队耗时、模型耗时、Token、重试次数、RAG 文档数和工具调用次数。Spring AI observation 的内容采集保持关闭，日志不得打印代码、Prompt、工具结果、模型原文或 API Key。
 
 ## Security boundary
 
@@ -107,4 +124,4 @@ GET /api/ai/actuator/prometheus
 - Question Service 只返回当前用户终态提交和同题最近三条历史；不返回答案、判题用例或其他用户代码。
 - 两个工具均为只读；模型不能指定任意用户或提交，也不能调用代码沙箱。
 - 模型输出的行号会按当前代码范围过滤，引用会被实际 RAG 召回文档覆盖，伪造引用不会落库。
-- 任务表和 MQ 消息只保存必要元数据；MQ 消息体只有 `taskId`。
+- 任务表是业务记录表，只保存任务状态和用户自己的历史复盘，不承担消息扫描或补投；Redis Stream 消息只包含 `taskId`。

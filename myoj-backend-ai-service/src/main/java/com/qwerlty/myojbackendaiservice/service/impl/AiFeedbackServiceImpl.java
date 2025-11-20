@@ -14,7 +14,9 @@ import com.qwerlty.myojbackendaiservice.model.dto.AiSubmissionContextDTO;
 import com.qwerlty.myojbackendaiservice.model.entity.AiFeedbackTask;
 import com.qwerlty.myojbackendaiservice.model.enums.AiFeedbackStatusEnum;
 import com.qwerlty.myojbackendaiservice.model.vo.AiFeedbackResultVO;
+import com.qwerlty.myojbackendaiservice.model.vo.AiFeedbackPageVO;
 import com.qwerlty.myojbackendaiservice.model.vo.AiFeedbackTaskVO;
+import com.qwerlty.myojbackendaiservice.queue.AiFeedbackStreamManager;
 import feign.FeignException;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -25,12 +27,12 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Date;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
@@ -41,8 +43,6 @@ import java.util.concurrent.TimeoutException;
 public class AiFeedbackServiceImpl implements com.qwerlty.myojbackendaiservice.service.AiFeedbackService {
 
     private static final Logger log = LoggerFactory.getLogger(AiFeedbackServiceImpl.class);
-    private static final long[] EXECUTE_BACKOFF_MS = {5_000L, 30_000L, 120_000L};
-
     private final AiFeedbackTaskMapper taskMapper;
     private final QuestionServiceClient questionServiceClient;
     private final RedisLimiterManager redisLimiterManager;
@@ -50,6 +50,7 @@ public class AiFeedbackServiceImpl implements com.qwerlty.myojbackendaiservice.s
     private final ObjectMapper objectMapper;
     private final ExecutorService aiAnalysisExecutor;
     private final MeterRegistry meterRegistry;
+    private final AiFeedbackStreamManager streamManager;
     private final String internalToken;
     private final String modelName;
     private final String promptVersion;
@@ -65,6 +66,7 @@ public class AiFeedbackServiceImpl implements com.qwerlty.myojbackendaiservice.s
             ObjectMapper objectMapper,
             @Qualifier("aiAnalysisExecutor") ExecutorService aiAnalysisExecutor,
             MeterRegistry meterRegistry,
+            AiFeedbackStreamManager streamManager,
             @Value("${myoj.ai.internal-token}") String internalToken,
             @Value("${myoj.ai.model-name}") String modelName,
             @Value("${myoj.ai.prompt-version}") String promptVersion,
@@ -78,6 +80,7 @@ public class AiFeedbackServiceImpl implements com.qwerlty.myojbackendaiservice.s
         this.objectMapper = objectMapper;
         this.aiAnalysisExecutor = aiAnalysisExecutor;
         this.meterRegistry = meterRegistry;
+        this.streamManager = streamManager;
         this.internalToken = internalToken;
         this.modelName = modelName;
         this.promptVersion = promptVersion;
@@ -87,13 +90,18 @@ public class AiFeedbackServiceImpl implements com.qwerlty.myojbackendaiservice.s
     }
 
     @Override
-    @Transactional
     public AiFeedbackTaskVO createTask(Long submissionId, Long userId) {
         requirePositive(submissionId, "submissionId");
         requirePositive(userId, "userId");
         String requestKey = requestKey(userId, submissionId, promptVersion, knowledgeVersion);
 
         AiFeedbackTask existing = taskMapper.selectByRequestKey(requestKey);
+        if (existing != null
+                && Integer.valueOf(AiFeedbackStatusEnum.PENDING.getValue()).equals(existing.getStatus())) {
+            return enqueueTask(existing.getId())
+                    ? toVO(existing)
+                    : toVO(taskMapper.selectById(existing.getId()));
+        }
         if (existing != null && !isRetryableTerminal(existing.getStatus())) {
             return toVO(existing);
         }
@@ -105,6 +113,7 @@ public class AiFeedbackServiceImpl implements com.qwerlty.myojbackendaiservice.s
                 redisLimiterManager.refund(userId);
             } else {
                 meterRegistry.counter("ai_feedback_task_created_total", "type", "manual_retry").increment();
+                enqueueTask(existing.getId());
             }
             return toVO(taskMapper.selectById(existing.getId()));
         }
@@ -123,9 +132,7 @@ public class AiFeedbackServiceImpl implements com.qwerlty.myojbackendaiservice.s
         task.setInputTokens(0);
         task.setOutputTokens(0);
         task.setLatencyMs(0L);
-        task.setDispatchRetryCount(0);
-        task.setExecuteRetryCount(0);
-        task.setNextRetryTime(now);
+        task.setAttemptCount(0);
         task.setCreateTime(now);
         task.setUpdateTime(now);
         try {
@@ -138,7 +145,7 @@ public class AiFeedbackServiceImpl implements com.qwerlty.myojbackendaiservice.s
             throw exception;
         }
         meterRegistry.counter("ai_feedback_task_created_total", "type", "new").increment();
-        return toVO(task);
+        return enqueueTask(task.getId()) ? toVO(task) : toVO(taskMapper.selectById(task.getId()));
     }
 
     @Override
@@ -155,6 +162,24 @@ public class AiFeedbackServiceImpl implements com.qwerlty.myojbackendaiservice.s
         requirePositive(userId, "userId");
         AiFeedbackTask task = taskMapper.selectLatest(userId, submissionId);
         return toOwnedVO(task, userId);
+    }
+
+    @Override
+    public AiFeedbackPageVO getHistory(Long userId, Long submissionId, int current, int pageSize) {
+        requirePositive(userId, "userId");
+        if (submissionId != null) {
+            requirePositive(submissionId, "submissionId");
+        }
+        if (current <= 0 || pageSize <= 0 || pageSize > 50) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "分页参数不合法");
+        }
+        long total = taskMapper.countHistory(userId, submissionId);
+        long offset = (long) (current - 1) * pageSize;
+        List<AiFeedbackTaskVO> records = taskMapper.listHistory(userId, submissionId, offset, pageSize)
+                .stream()
+                .map(this::toVO)
+                .toList();
+        return new AiFeedbackPageVO(records, total, current, pageSize);
     }
 
     @Override
@@ -178,11 +203,9 @@ public class AiFeedbackServiceImpl implements com.qwerlty.myojbackendaiservice.s
             AiAnalysisResult analysis = future.get(analysisTimeoutMs, TimeUnit.MILLISECONDS);
             long latencyMs = elapsedMillis(startNanos);
             String resultJson = objectMapper.writeValueAsString(analysis.getResult());
-            String citationsJson = objectMapper.writeValueAsString(analysis.getCitations());
             int updated = taskMapper.markSuccess(
                     taskId,
                     resultJson,
-                    citationsJson,
                     analysis.getInputTokens(),
                     analysis.getOutputTokens(),
                     latencyMs);
@@ -240,7 +263,7 @@ public class AiFeedbackServiceImpl implements com.qwerlty.myojbackendaiservice.s
         if (current == null || !Integer.valueOf(AiFeedbackStatusEnum.RUNNING.getValue()).equals(current.getStatus())) {
             return;
         }
-        int retryCount = current.getExecuteRetryCount() == null ? 0 : current.getExecuteRetryCount();
+        int retryCount = current.getAttemptCount() == null ? 0 : current.getAttemptCount();
         String errorCode = classifyErrorCode(throwable);
         String safeMessage = safeErrorMessage(errorCode);
         boolean retryable = isRetryable(throwable);
@@ -248,12 +271,13 @@ public class AiFeedbackServiceImpl implements com.qwerlty.myojbackendaiservice.s
         log.warn("AI task execution failed: taskId={}, errorType={}, retry={}",
                 originalTask.getId(), throwable.getClass().getSimpleName(), retryCount);
         if (retryable && retryCount < maxExecuteRetry) {
-            taskMapper.markExecutionRetry(
+            int updated = taskMapper.markExecutionRetry(
                     originalTask.getId(),
-                    new Date(System.currentTimeMillis() + executeBackoffMs(retryCount)),
                     errorCode,
                     safeMessage);
-            meterRegistry.counter("ai_feedback_task_retry_total", "reason", errorCode).increment();
+            if (updated > 0 && enqueueTask(originalTask.getId())) {
+                meterRegistry.counter("ai_feedback_task_retry_total", "reason", errorCode).increment();
+            }
             return;
         }
 
@@ -379,6 +403,23 @@ public class AiFeedbackServiceImpl implements com.qwerlty.myojbackendaiservice.s
         }
     }
 
+    private boolean enqueueTask(Long taskId) {
+        try {
+            streamManager.enqueue(taskId);
+            meterRegistry.counter("ai_feedback_stream_enqueue_total", "outcome", "success").increment();
+            return true;
+        } catch (RuntimeException exception) {
+            taskMapper.markPendingTerminal(
+                    taskId,
+                    AiFeedbackStatusEnum.FAILED.getValue(),
+                    "QUEUE_UNAVAILABLE",
+                    "AI 异步队列暂时不可用，请稍后重试");
+            meterRegistry.counter("ai_feedback_stream_enqueue_total", "outcome", "failed").increment();
+            log.warn("Unable to enqueue AI task directly to Redis Stream, taskId={}", taskId);
+            return false;
+        }
+    }
+
     private String requestKey(Long userId, Long submissionId, String prompt, String knowledge) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -387,11 +428,6 @@ public class AiFeedbackServiceImpl implements com.qwerlty.myojbackendaiservice.s
         } catch (Exception exception) {
             throw new IllegalStateException("无法生成幂等键", exception);
         }
-    }
-
-    private long executeBackoffMs(int retryCount) {
-        int index = Math.max(0, Math.min(retryCount - 1, EXECUTE_BACKOFF_MS.length - 1));
-        return EXECUTE_BACKOFF_MS[index];
     }
 
     private long elapsedMillis(long startNanos) {

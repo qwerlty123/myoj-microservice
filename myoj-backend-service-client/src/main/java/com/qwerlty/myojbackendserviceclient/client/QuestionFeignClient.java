@@ -1,6 +1,9 @@
 package com.qwerlty.myojbackendserviceclient.client;
 
 import com.qwerlty.myojbackendmodel.model.dto.questionsubmit.QuestionSubmitQueryDTO;
+import com.qwerlty.myojbackendmodel.model.dto.judge.JudgeTaskClaimRequest;
+import com.qwerlty.myojbackendmodel.model.dto.judge.JudgeTaskCompleteRequest;
+import com.qwerlty.myojbackendmodel.model.dto.judge.JudgeTaskRetryRequest;
 import com.qwerlty.myojbackendmodel.model.entity.Question;
 import com.qwerlty.myojbackendmodel.model.entity.QuestionSubmit;
 import org.springframework.cloud.openfeign.FeignClient;
@@ -49,8 +52,14 @@ public interface QuestionFeignClient {
     @GetMapping("/get/id")
     Question getQuestionById(@RequestParam("questionId") long questionId);
 
-    @PostMapping("/question_submit/update/id")
-    Boolean updateQuestionSubmitById(@RequestBody QuestionSubmit questionSubmit);
+    @PostMapping("/question_submit/judge/claim")
+    Boolean claimJudgeTask(@RequestBody JudgeTaskClaimRequest request);
+
+    @PostMapping("/question_submit/judge/complete")
+    Boolean completeJudgeTask(@RequestBody JudgeTaskCompleteRequest request);
+
+    @PostMapping("/question_submit/judge/retry")
+    Boolean retryJudgeTask(@RequestBody JudgeTaskRetryRequest request);
 
 
     @PostMapping("/question/update/id")

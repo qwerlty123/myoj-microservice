@@ -44,7 +44,7 @@
       "fieldConfig": {"defaults": {"unit": "short", "min": 0}},
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
       "id": 5,
-      "targets": [{"expr": "myoj_judge_outbox{status=\"pending\"}", "legendFormat": "pending"}, {"expr": "myoj_judge_outbox{status=\"dispatching\"}", "legendFormat": "dispatching"}, {"expr": "myoj_judge_outbox{status=\"stopped\"}", "legendFormat": "stopped"}],
+      "targets": [{"expr": "myoj_judge_outbox{status=\"pending\"}", "legendFormat": "pending"}, {"expr": "myoj_judge_outbox{status=\"dispatching\"}", "legendFormat": "dispatching"}, {"expr": "myoj_judge_outbox{status=\"dead\"}", "legendFormat": "dead"}],
       "title": "Judge Outbox",
       "type": "timeseries"
     },

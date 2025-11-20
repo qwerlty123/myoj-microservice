@@ -44,6 +44,11 @@ public class QuestionSubmit implements Serializable {
     private Integer status;
 
     /**
+     * Current judge execution generation. Results from older attempts are ignored.
+     */
+    private Integer judgeAttempt;
+
+    /**
      * 题目 id
      */
     private Long questionId;
@@ -70,7 +75,7 @@ public class QuestionSubmit implements Serializable {
     private Integer isDelete;
 
     /**
-     * 判题重试次数（含补偿重投）
+     * 判题执行重试次数（不含 MQ 发布重试）
      */
     private Integer retryCount;
 

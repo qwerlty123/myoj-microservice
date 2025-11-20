@@ -18,18 +18,18 @@ import java.util.concurrent.atomic.AtomicLong;
 public class JudgeOutboxMetrics {
 
     private static final int STATUS_PENDING = 0;
-    private static final int STATUS_STOPPED = 2;
+    private static final int STATUS_DEAD = 2;
     private static final int STATUS_DISPATCHING = 3;
 
     private final JudgeTaskOutboxMapper judgeTaskOutboxMapper;
     private final AtomicLong pending = new AtomicLong();
-    private final AtomicLong stopped = new AtomicLong();
+    private final AtomicLong dead = new AtomicLong();
     private final AtomicLong dispatching = new AtomicLong();
 
     public JudgeOutboxMetrics(JudgeTaskOutboxMapper judgeTaskOutboxMapper, MeterRegistry meterRegistry) {
         this.judgeTaskOutboxMapper = judgeTaskOutboxMapper;
         registerGauge(meterRegistry, "pending", pending);
-        registerGauge(meterRegistry, "stopped", stopped);
+        registerGauge(meterRegistry, "dead", dead);
         registerGauge(meterRegistry, "dispatching", dispatching);
     }
 
@@ -44,7 +44,7 @@ public class JudgeOutboxMetrics {
     public void refresh() {
         try {
             pending.set(judgeTaskOutboxMapper.countByStatus(STATUS_PENDING));
-            stopped.set(judgeTaskOutboxMapper.countByStatus(STATUS_STOPPED));
+            dead.set(judgeTaskOutboxMapper.countByStatus(STATUS_DEAD));
             dispatching.set(judgeTaskOutboxMapper.countByStatus(STATUS_DISPATCHING));
         } catch (Exception e) {
             log.warn("Unable to refresh judge outbox metrics", e);

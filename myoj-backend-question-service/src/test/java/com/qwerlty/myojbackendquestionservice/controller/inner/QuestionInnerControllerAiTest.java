@@ -2,8 +2,10 @@ package com.qwerlty.myojbackendquestionservice.controller.inner;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.qwerlty.myojbackendcommon.common.BaseResponse;
 import com.qwerlty.myojbackendcommon.exception.BusinessException;
+import com.qwerlty.myojbackendmodel.model.dto.questionsubmit.QuestionSubmitQueryDTO;
 import com.qwerlty.myojbackendmodel.model.entity.Question;
 import com.qwerlty.myojbackendmodel.model.entity.QuestionSubmit;
 import com.qwerlty.myojbackendmodel.model.enums.QuestionSubmitStatusEnum;
@@ -12,13 +14,17 @@ import com.qwerlty.myojbackendquestionservice.service.QuestionService;
 import com.qwerlty.myojbackendquestionservice.service.QuestionSubmitService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Date;
+import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class QuestionInnerControllerAiTest {
@@ -78,6 +84,21 @@ class QuestionInnerControllerAiTest {
     void invalidInternalTokenIsRejectedBeforeDatabaseAccess() {
         assertThatThrownBy(() -> controller.getAiSubmissionContext(9L, 7L, "wrong-token"))
                 .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void submissionListIsOrderedNewestFirst() {
+        QuestionSubmitQueryDTO query = new QuestionSubmitQueryDTO();
+        query.setUserId(7L);
+        when(questionSubmitService.list(any(QueryWrapper.class))).thenReturn(Collections.emptyList());
+
+        controller.list(query);
+
+        ArgumentCaptor<QueryWrapper> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(questionSubmitService).list(captor.capture());
+        assertThat(captor.getValue().getSqlSegment())
+                .containsIgnoringCase("ORDER BY createTime DESC,id DESC");
     }
 
     private QuestionSubmit terminalSubmission(Long submissionId, Long userId) {

@@ -6,7 +6,6 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
-import java.util.Date;
 import java.util.List;
 
 public interface AiFeedbackTaskMapper extends BaseMapper<AiFeedbackTask> {
@@ -18,69 +17,61 @@ public interface AiFeedbackTaskMapper extends BaseMapper<AiFeedbackTask> {
             + "order by createTime desc limit 1")
     AiFeedbackTask selectLatest(@Param("userId") Long userId, @Param("submissionId") Long submissionId);
 
-    @Select("select * from ai_feedback_task where status = 0 and nextRetryTime <= now() "
-            + "order by nextRetryTime asc limit #{limit}")
-    List<AiFeedbackTask> listDispatchCandidates(@Param("limit") int limit);
+    @Select("<script>select count(*) from ai_feedback_task where userId = #{userId}"
+            + "<if test='submissionId != null'> and submissionId = #{submissionId}</if></script>")
+    long countHistory(@Param("userId") Long userId, @Param("submissionId") Long submissionId);
 
-    @Update("update ai_feedback_task set status = 1, updateTime = now() where id = #{id} and status = 0")
-    int claimForDispatch(@Param("id") Long id);
+    @Select("<script>select * from ai_feedback_task where userId = #{userId}"
+            + "<if test='submissionId != null'> and submissionId = #{submissionId}</if>"
+            + " order by createTime desc limit #{offset}, #{pageSize}</script>")
+    List<AiFeedbackTask> listHistory(@Param("userId") Long userId,
+                                     @Param("submissionId") Long submissionId,
+                                     @Param("offset") long offset,
+                                     @Param("pageSize") int pageSize);
 
-    @Update("update ai_feedback_task set status = 2, lastError = null, errorCode = null, updateTime = now() "
-            + "where id = #{id} and status = 1")
-    int markQueued(@Param("id") Long id);
-
-    @Update("update ai_feedback_task set status = #{status}, dispatchRetryCount = #{retryCount}, "
-            + "nextRetryTime = #{nextRetryTime}, errorCode = #{errorCode}, lastError = #{lastError}, "
-            + "updateTime = now() where id = #{id} and status = 1")
-    int markDispatchFailure(@Param("id") Long id,
-                            @Param("status") int status,
-                            @Param("retryCount") int retryCount,
-                            @Param("nextRetryTime") Date nextRetryTime,
-                            @Param("errorCode") String errorCode,
-                            @Param("lastError") String lastError);
-
-    @Update("update ai_feedback_task set status = 3, executeRetryCount = executeRetryCount + 1, "
-            + "updateTime = now() where id = #{id} and status = 2")
+    @Update("update ai_feedback_task set status = 1, attemptCount = attemptCount + 1, "
+            + "startedTime = now(), finishedTime = null, errorCode = null, lastError = null, updateTime = now() "
+            + "where id = #{id} and status = 0")
     int claimForExecution(@Param("id") Long id);
 
-    @Update("update ai_feedback_task set status = 4, resultJson = #{resultJson}, citationsJson = #{citationsJson}, "
+    @Update("update ai_feedback_task set status = 2, resultJson = #{resultJson}, "
             + "inputTokens = #{inputTokens}, outputTokens = #{outputTokens}, latencyMs = #{latencyMs}, "
-            + "errorCode = null, lastError = null, updateTime = now() where id = #{id} and status = 3")
+            + "finishedTime = now(), errorCode = null, lastError = null, updateTime = now() "
+            + "where id = #{id} and status = 1")
     int markSuccess(@Param("id") Long id,
                     @Param("resultJson") String resultJson,
-                    @Param("citationsJson") String citationsJson,
                     @Param("inputTokens") int inputTokens,
                     @Param("outputTokens") int outputTokens,
                     @Param("latencyMs") long latencyMs);
 
-    @Update("update ai_feedback_task set status = 0, nextRetryTime = #{nextRetryTime}, "
+    @Update("update ai_feedback_task set status = 0, startedTime = null, "
             + "errorCode = #{errorCode}, lastError = #{lastError}, updateTime = now() "
-            + "where id = #{id} and status = 3")
+            + "where id = #{id} and status = 1")
     int markExecutionRetry(@Param("id") Long id,
-                           @Param("nextRetryTime") Date nextRetryTime,
                            @Param("errorCode") String errorCode,
                            @Param("lastError") String lastError);
 
     @Update("update ai_feedback_task set status = #{status}, errorCode = #{errorCode}, "
-            + "lastError = #{lastError}, latencyMs = #{latencyMs}, updateTime = now() "
-            + "where id = #{id} and status = 3")
+            + "lastError = #{lastError}, latencyMs = #{latencyMs}, finishedTime = now(), updateTime = now() "
+            + "where id = #{id} and status = 1")
     int markExecutionTerminal(@Param("id") Long id,
                               @Param("status") int status,
                               @Param("errorCode") String errorCode,
                               @Param("lastError") String lastError,
                               @Param("latencyMs") long latencyMs);
 
-    @Update("update ai_feedback_task set status = 0, dispatchRetryCount = 0, executeRetryCount = 0, "
-            + "nextRetryTime = now(), resultJson = null, citationsJson = null, errorCode = null, "
+    @Update("update ai_feedback_task set status = 0, attemptCount = 0, "
+            + "startedTime = null, finishedTime = null, resultJson = null, errorCode = null, "
             + "lastError = null, modelName = #{modelName}, updateTime = now() "
-            + "where id = #{id} and status in (5, 6)")
+            + "where id = #{id} and status in (3, 4)")
     int resetFailedTask(@Param("id") Long id, @Param("modelName") String modelName);
 
-    @Update("update ai_feedback_task set status = 0, nextRetryTime = now(), updateTime = now() "
-            + "where status = 1 and updateTime < #{staleBefore}")
-    int releaseStaleDispatching(@Param("staleBefore") Date staleBefore);
+    @Update("update ai_feedback_task set status = #{status}, errorCode = #{errorCode}, "
+            + "lastError = #{lastError}, finishedTime = now(), updateTime = now() "
+            + "where id = #{id} and status = 0")
+    int markPendingTerminal(@Param("id") Long id,
+                            @Param("status") int status,
+                            @Param("errorCode") String errorCode,
+                            @Param("lastError") String lastError);
 
-    @Select("select * from ai_feedback_task where status = 3 and updateTime < #{staleBefore} "
-            + "order by updateTime asc limit #{limit}")
-    List<AiFeedbackTask> listStaleRunning(@Param("staleBefore") Date staleBefore, @Param("limit") int limit);
 }

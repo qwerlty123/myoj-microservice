@@ -58,21 +58,5 @@ public interface QuestionSubmitService extends IService<QuestionSubmit> {
 
     List<UserLeaderboardVO> getLeaderboard();
 
-    /**
-     * CAS 抢占任务：WAITING -> RUNNING
-     */
-    boolean claimForJudge(Long questionSubmitId);
-
-    /**
-     * CAS 完成任务：RUNNING -> (SUCCEED / FAILED)
-     */
-    boolean finishFromRunning(Long questionSubmitId, Integer status, String judgeInfo, String lastError);
-
     List<QuestionSubmit> listTimeoutRunning(Date deadline, int limit);
-
-    List<QuestionSubmit> listStuckWaiting(Date deadline, int limit);
-
-    boolean retryRunningAsWaiting(Long questionSubmitId, Date nextRetryTime, String lastError);
-
-    boolean markFailedIfUnfinished(Long questionSubmitId, String judgeInfo, String lastError);
 }

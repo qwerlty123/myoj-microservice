@@ -13,7 +13,8 @@ import org.springframework.boot.test.mock.mockito.MockBean;
                 "spring.cloud.nacos.discovery.enabled=false",
                 "spring.cloud.discovery.enabled=false",
                 "spring.rabbitmq.listener.simple.auto-startup=false",
-                "spring.rabbitmq.listener.direct.auto-startup=false"
+                "spring.rabbitmq.listener.direct.auto-startup=false",
+                "codesandbox.secretKey=0123456789abcdef0123456789abcdef"
         }
 )
 class MyojBackendJudgeServiceApplicationTests {

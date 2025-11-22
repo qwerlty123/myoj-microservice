@@ -6,6 +6,7 @@ import com.qwerlty.myojbackendcommon.exception.BusinessException;
 import com.qwerlty.myojbackendjudgeservice.judge.codesandbox.CodeSandbox;
 import com.qwerlty.myojbackendjudgeservice.judge.codesandbox.CodeSandboxFactory;
 import com.qwerlty.myojbackendjudgeservice.judge.codesandbox.CodeSandboxProxy;
+import com.qwerlty.myojbackendjudgeservice.judge.codesandbox.SandboxConfigurationException;
 import com.qwerlty.myojbackendjudgeservice.judge.strategy.JudgeContext;
 import com.qwerlty.myojbackendmodel.model.codesandbox.ExecuteCodeRequest;
 import com.qwerlty.myojbackendmodel.model.codesandbox.ExecuteCodeResponse;
@@ -21,6 +22,7 @@ import com.qwerlty.myojbackendmodel.model.enums.JudgeInfoMessageEnum;
 import com.qwerlty.myojbackendmodel.model.enums.QuestionSubmitStatusEnum;
 import com.qwerlty.myojbackendserviceclient.client.QuestionFeignClient;
 import org.apache.commons.lang3.StringUtils;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -32,6 +34,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
+@Slf4j
 public class JudgeServiceImpl implements JudgeService {
 
     private static final int STATUS_SUCCESS = 1;
@@ -112,7 +115,13 @@ public class JudgeServiceImpl implements JudgeService {
         try {
             CodeSandbox codeSandbox = new CodeSandboxProxy(codeSandboxFactory.newInstance(type));
             executeCodeResponse = codeSandbox.executeCode(executeCodeRequest);
+        } catch (SandboxConfigurationException e) {
+            log.error("judge stopped for sandbox configuration error, submitId={}, attempt={}, message={}",
+                    submissionId, attempt, e.getMessage());
+            return finishPermanently(submissionId, attempt, e.getMessage());
         } catch (Exception e) {
+            log.warn("judge will retry after sandbox call failure, submitId={}, attempt={}, message={}",
+                    submissionId, attempt, safeMessage(e));
             return retryAfterSystemError(submissionId, attempt, "代码沙箱调用失败: " + safeMessage(e));
         }
         if (executeCodeResponse == null || executeCodeResponse.getStatus() == null) {

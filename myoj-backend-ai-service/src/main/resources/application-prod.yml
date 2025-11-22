@@ -18,3 +18,7 @@ spring:
 myoj:
   ai:
     internal-token: ${AI_INTERNAL_TOKEN}
+    generation:
+      sandbox:
+        url: ${CODESANDBOX_URL}
+        secret-key: ${CODESANDBOX_SECRET_KEY}

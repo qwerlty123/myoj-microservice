@@ -6,6 +6,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.connection.stream.Consumer;
 import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.ReadOffset;
@@ -29,6 +30,7 @@ public class AiFeedbackStreamConsumer {
             AiFeedbackTaskMapper taskMapper,
             AiFeedbackService feedbackService,
             AiFeedbackStreamManager streamManager,
+            @Qualifier("aiStreamListenerContainer")
             StreamMessageListenerContainer<String, MapRecord<String, String, String>> container,
             MeterRegistry meterRegistry,
             @Value("${myoj.ai.stream.consumer-prefix:${HOSTNAME:ai-service}}") String consumerPrefix,

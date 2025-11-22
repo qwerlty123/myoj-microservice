@@ -41,6 +41,11 @@ public class QuestionSubmitVO implements Serializable {
     private Integer status;
 
     /**
+     * 最近一次判题系统错误，用于前端在失败终态给出明确原因。
+     */
+    private String lastError;
+
+    /**
      * 题目 id
      */
     private Long questionId;

@@ -32,10 +32,10 @@ create table if not exists question
     title        varchar(512)                        null comment '标题',
     content      text                                 null comment '内容',
     tags         varchar(1024)                       null comment '标签列表（json 数组）',
-    answer       text                                 null comment '题目答案',
+    answer       mediumtext                           null comment '题目答案',
     submitNum    int          default 0                not null comment '题目提交数',
     acceptedNum  int          default 0                not null comment '题目通过数',
-    judgeCase    text                                 null comment '判题用例（json 数组）',
+    judgeCase    mediumtext                           null comment '判题用例（json 数组）',
     judgeConfig  text                                 null comment '判题配置（json 对象）',
     thumbNum     int          default 0                not null comment '点赞数',
     favourNum    int          default 0                not null comment '收藏数',
@@ -122,6 +122,38 @@ create table if not exists ai_feedback_task
     index idx_user_submission_time (userId, submissionId, createTime),
     index idx_createTime (createTime)
 ) comment 'AI 提交复盘任务' collate = utf8mb4_unicode_ci;
+
+-- AI 自动出题任务；生成草稿不会直接写入 question 表
+create table if not exists ai_problem_generation_task
+(
+    id             bigint                                   not null comment '任务 id' primary key,
+    requestKey     char(64)                                 not null comment '用户幂等键哈希',
+    userId         bigint                                   not null comment '管理员用户 id',
+    mode           varchar(32)                              not null comment 'FULL_PROBLEM / TEST_CASES',
+    status         tinyint        default 0                 not null comment '0待执行 1执行中 2待审核 3失败 4超时 5取消',
+    stage          varchar(64)    default 'QUEUED'          not null,
+    progress       tinyint unsigned default 0               not null,
+    requestJson    json                                     not null,
+    resultJson     json                                     null,
+    validationJson json                                     null,
+    modelName      varchar(128)                              not null,
+    promptVersion  varchar(64)                               not null,
+    inputTokens    int unsigned    default 0                 not null,
+    outputTokens   int unsigned    default 0                 not null,
+    latencyMs      bigint unsigned default 0                 not null,
+    attemptCount   smallint unsigned default 0               not null,
+    cancelRequested tinyint       default 0                 not null,
+    startedTime    datetime                                  null,
+    finishedTime   datetime                                  null,
+    errorCode      varchar(64)                               null,
+    lastError      varchar(512)                              null,
+    createTime     datetime        default CURRENT_TIMESTAMP not null,
+    updateTime     datetime        default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP,
+    version        int unsigned    default 0                 not null,
+    unique index uk_generation_requestKey (requestKey),
+    index idx_generation_user_time (userId, createTime),
+    index idx_generation_status_time (status, updateTime)
+) comment 'AI 题目生成任务' collate = utf8mb4_unicode_ci;
 
 -- 评论表（与 Comment 实体一致）
 create table if not exists comment

@@ -7,6 +7,7 @@ import com.qwerlty.myojbackendcommon.common.ErrorCode;
 import com.qwerlty.myojbackendcommon.exception.BusinessException;
 import com.qwerlty.myojbackendcommon.utils.ApiSignUtil;
 import com.qwerlty.myojbackendjudgeservice.judge.codesandbox.CodeSandbox;
+import com.qwerlty.myojbackendjudgeservice.judge.codesandbox.SandboxConfigurationException;
 import com.qwerlty.myojbackendmodel.model.codesandbox.ExecuteCodeRequest;
 import com.qwerlty.myojbackendmodel.model.codesandbox.ExecuteCodeResponse;
 import org.apache.commons.lang3.StringUtils;
@@ -54,6 +55,10 @@ public class RemoteCodeSandbox implements CodeSandbox {
     }
 
     ExecuteCodeResponse parseResponse(int httpStatus, String responseStr) {
+        if (httpStatus == 401 || httpStatus == 403) {
+            throw new SandboxConfigurationException(
+                    "远程代码沙箱认证失败（HTTP " + httpStatus + "），请检查双方 CODESANDBOX_SECRET_KEY");
+        }
         if (httpStatus < 200 || httpStatus >= 300) {
             throw new BusinessException(ErrorCode.API_REQUEST_ERROR, "远程代码沙箱返回 HTTP " + httpStatus);
         }

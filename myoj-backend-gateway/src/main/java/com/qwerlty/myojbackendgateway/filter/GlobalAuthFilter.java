@@ -88,8 +88,14 @@ public class GlobalAuthFilter implements GlobalFilter, Ordered {
 
             //将用户信息添加到请求头中，传递给下游服务
             ServerHttpRequest newRequest = request.mutate()
-                    .header("X-user-Id", userId.toString())
-                    .header("X-user-Role", userRole)
+                    .headers(headers -> {
+                        // 客户端身份头不可信，必须先移除再写入 JWT 中的可信身份。
+                        headers.remove("X-user-Id");
+                        headers.remove("X-user-Role");
+                        headers.remove("X-Gateway-Token");
+                        headers.set("X-user-Id", userId.toString());
+                        headers.set("X-user-Role", userRole);
+                    })
                     .build();
             return chain.filter(exchange.mutate().request(newRequest).build());
         } catch (Exception e) {

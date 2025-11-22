@@ -111,9 +111,9 @@ knife4j:
 codesandbox:
   type: remote
   # 远程沙箱地址（使用 remote 时生效）
-  url: http://localhost:8090/executeCode
+  url: ${CODESANDBOX_URL:http://localhost:8090/executeCode}
   # 与沙箱共享的密钥，用于 API 签名认证，请与沙箱配置保持一致并妥善保管
-  secretKey: adgjl08642
+  secretKey: ${CODESANDBOX_SECRET_KEY:}
 
 management:
   # 当前部署未启用 Elasticsearch，避免 Actuator 探测本机 9200 导致健康状态告警。

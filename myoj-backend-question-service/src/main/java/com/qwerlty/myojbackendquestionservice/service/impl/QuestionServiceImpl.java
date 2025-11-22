@@ -12,6 +12,8 @@ import com.qwerlty.myojbackendcommon.exception.BusinessException;
 import com.qwerlty.myojbackendcommon.exception.ThrowUtils;
 import com.qwerlty.myojbackendcommon.utils.SqlUtils;
 import com.qwerlty.myojbackendmodel.model.dto.question.QuestionQueryRequest;
+import com.qwerlty.myojbackendmodel.model.dto.question.JudgeCase;
+import com.qwerlty.myojbackendmodel.model.dto.question.JudgeConfig;
 import com.qwerlty.myojbackendmodel.model.entity.Question;
 import com.qwerlty.myojbackendmodel.model.entity.QuestionSubmit;
 import com.qwerlty.myojbackendmodel.model.entity.User;
@@ -34,6 +36,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.nio.charset.StandardCharsets;
 
 /**
 * @author 17871
@@ -82,7 +85,8 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question>
         String judgeConfig = question.getJudgeConfig();
         // 创建时，参数不能为空
         if (add) {
-            ThrowUtils.throwIf(StringUtils.isAnyBlank(title, content, tags), ErrorCode.PARAMS_ERROR);
+            ThrowUtils.throwIf(StringUtils.isAnyBlank(title, content, tags, judgeCase, judgeConfig),
+                    ErrorCode.PARAMS_ERROR);
         }
         // 有参数则校验
         if (StringUtils.isNotBlank(title) && title.length() > 80) {
@@ -91,14 +95,61 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question>
         if (StringUtils.isNotBlank(content) && content.length() > 8192) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "内容过长");
         }
-        if (StringUtils.isNotBlank(answer) && content.length() > 8192) {
+        if (StringUtils.isNotBlank(answer)
+                && answer.getBytes(StandardCharsets.UTF_8).length > 200 * 1024) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "答案过长");
         }
-        if (StringUtils.isNotBlank(judgeCase) && content.length() > 8192) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR, "判题用例过长");
+        if (StringUtils.isNotBlank(tags) && tags.getBytes(StandardCharsets.UTF_8).length > 1024) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "标签过长");
         }
-        if (StringUtils.isNotBlank(judgeConfig) && content.length() > 8192) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR, "判题配置过长");
+        if (StringUtils.isNotBlank(judgeCase)) {
+            if (judgeCase.getBytes(StandardCharsets.UTF_8).length > 1024 * 1024) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "判题用例总大小不能超过 1 MiB");
+            }
+            validateJudgeCases(judgeCase);
+        }
+        if (StringUtils.isNotBlank(judgeConfig)) {
+            if (judgeConfig.getBytes(StandardCharsets.UTF_8).length > 4096) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "判题配置过长");
+            }
+            validateJudgeConfig(judgeConfig);
+        }
+    }
+
+    private void validateJudgeCases(String value) {
+        List<JudgeCase> cases;
+        try {
+            cases = JSONUtil.toList(value, JudgeCase.class);
+        } catch (Exception exception) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "判题用例格式错误");
+        }
+        if (cases == null || cases.isEmpty() || cases.size() > 100) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "判题用例数量必须在 1 到 100 之间");
+        }
+        for (JudgeCase item : cases) {
+            if (item == null || item.getInput() == null || item.getOutput() == null) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "判题用例输入输出不能为空");
+            }
+            if (item.getInput().getBytes(StandardCharsets.UTF_8).length > 1024 * 1024
+                    || item.getOutput().getBytes(StandardCharsets.UTF_8).length > 1024 * 1024) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "单个判题用例过大");
+            }
+        }
+    }
+
+    private void validateJudgeConfig(String value) {
+        JudgeConfig config;
+        try {
+            config = JSONUtil.toBean(value, JudgeConfig.class);
+        } catch (Exception exception) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "判题配置格式错误");
+        }
+        if (config == null || config.getTimeLimit() == null || config.getMemoryLimit() == null
+                || config.getStackLimit() == null
+                || config.getTimeLimit() < 100 || config.getTimeLimit() > 15000
+                || config.getMemoryLimit() < 16384 || config.getMemoryLimit() > 524288
+                || config.getStackLimit() < 256 || config.getStackLimit() > 262144) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "判题资源限制不合法");
         }
     }
 
@@ -202,7 +253,5 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question>
         return  new Page<HotQuestionVO>(hotQuestionPage.getCurrent(), hotQuestionPage.getSize(), hotQuestionPage.getTotal()).setRecords(hotQuestionVOS);
     }
 }
-
-
 
 

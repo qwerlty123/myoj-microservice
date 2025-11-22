@@ -10,6 +10,7 @@ import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 
 @Configuration
 public class SpringAiConfig {
@@ -31,6 +32,7 @@ public class SpringAiConfig {
     }
 
     @Bean
+    @Primary
     public ChatClient aiChatClient(ChatModel chatModel,
                                    RetrievalAugmentationAdvisor retrievalAugmentationAdvisor) {
         return ChatClient.builder(chatModel)
@@ -38,5 +40,11 @@ public class SpringAiConfig {
                         retrievalAugmentationAdvisor,
                         ToolCallAdvisor.builder().build())
                 .build();
+    }
+
+    /** 自动出题使用独立 ChatClient，不继承复盘的 RAG 和工具 Advisor。 */
+    @Bean("problemGenerationChatClient")
+    public ChatClient problemGenerationChatClient(ChatModel chatModel) {
+        return ChatClient.builder(chatModel).build();
     }
 }

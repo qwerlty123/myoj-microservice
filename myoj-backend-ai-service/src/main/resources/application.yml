@@ -107,6 +107,31 @@ myoj:
       ensure-group-interval-ms: 30000
     rate-limit:
       per-user-per-hour: 10
+    generation:
+      prompt-version: ${AI_GENERATION_PROMPT_VERSION:v1}
+      concurrency: ${AI_GENERATION_CONCURRENCY:2}
+      # 完整出题包含多次结构化模型调用和多语言沙箱验证，5 分钟不足以覆盖慢响应。
+      task-timeout-ms: ${AI_GENERATION_TASK_TIMEOUT_MS:900000}
+      # 必须晚于任务自身超时，避免恢复任务把仍在正常执行的消息重复消费。
+      running-timeout-ms: ${AI_GENERATION_RUNNING_TIMEOUT_MS:1200000}
+      max-attempts: ${AI_GENERATION_MAX_ATTEMPTS:3}
+      recovery-interval-ms: 15000
+      rate-limit:
+        per-user-per-hour: ${AI_GENERATION_USER_HOURLY_LIMIT:10}
+        global-per-hour: ${AI_GENERATION_GLOBAL_HOURLY_LIMIT:30}
+      stream:
+        key: ${AI_GENERATION_STREAM_KEY:myoj:ai:generation:stream}
+        group: ${AI_GENERATION_STREAM_GROUP:myoj-ai-generation}
+        consumer-prefix: ${AI_GENERATION_CONSUMER_PREFIX:${HOSTNAME:ai-generation}}
+        max-length: 5000
+        reclaim-batch-size: 20
+        ensure-group-interval-ms: 30000
+      sandbox:
+        url: ${CODESANDBOX_URL:http://localhost:8090/executeCode}
+        secret-key: ${CODESANDBOX_SECRET_KEY}
+        connect-timeout-ms: 3000
+        read-timeout-ms: 120000
+        output-limit-bytes: 1048576
 
 management:
   endpoints:

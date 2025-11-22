@@ -20,6 +20,7 @@ import com.qwerlty.myojbackendquestionservice.mapper.QuestionSubmitMapper;
 import com.qwerlty.myojbackendquestionservice.service.JudgeTaskCoordinator;
 import com.qwerlty.myojbackendquestionservice.service.QuestionService;
 import com.qwerlty.myojbackendquestionservice.service.QuestionSubmitService;
+import com.qwerlty.myojbackendquestionservice.validation.SubmissionLanguageValidator;
 import com.qwerlty.myojbackendserviceclient.client.UserFeignClient;
 import lombok.RequiredArgsConstructor;
 import org.apache.commons.lang3.ObjectUtils;
@@ -56,6 +57,9 @@ public class QuestionSubmitServiceImpl extends ServiceImpl<QuestionSubmitMapper,
     @Resource
     private JudgeTaskCoordinator judgeTaskCoordinator;
 
+    @Resource
+    private SubmissionLanguageValidator submissionLanguageValidator;
+
     /**
      * 提交题目
      *
@@ -72,6 +76,7 @@ public class QuestionSubmitServiceImpl extends ServiceImpl<QuestionSubmitMapper,
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "暂不支持该编程语言："+language);
         }
         String code = questionSubmitAddRequest.getCode();
+        submissionLanguageValidator.validate(language, code);
         Long questionId = questionSubmitAddRequest.getQuestionId();
         // 判断实体是否存在，根据类别获取实体
         Question question = questionService.getById(questionId);
@@ -247,6 +252,5 @@ public class QuestionSubmitServiceImpl extends ServiceImpl<QuestionSubmitMapper,
         return questionSubmitMapper.listTimeoutRunning(deadline, limit);
     }
 }
-
 
 

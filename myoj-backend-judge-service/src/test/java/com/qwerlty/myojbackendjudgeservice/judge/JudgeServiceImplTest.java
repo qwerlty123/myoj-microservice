@@ -3,6 +3,7 @@ package com.qwerlty.myojbackendjudgeservice.judge;
 import cn.hutool.json.JSONUtil;
 import com.qwerlty.myojbackendjudgeservice.judge.codesandbox.CodeSandbox;
 import com.qwerlty.myojbackendjudgeservice.judge.codesandbox.CodeSandboxFactory;
+import com.qwerlty.myojbackendjudgeservice.judge.codesandbox.SandboxConfigurationException;
 import com.qwerlty.myojbackendmodel.model.codesandbox.ExecuteCodeResponse;
 import com.qwerlty.myojbackendmodel.model.codesandbox.JudgeInfo;
 import com.qwerlty.myojbackendmodel.model.dto.judge.JudgeTaskCompleteRequest;
@@ -98,6 +99,22 @@ class JudgeServiceImplTest {
         assertEquals(QuestionSubmitStatusEnum.WAITING.getValue(), result.getStatus());
         assertEquals(ATTEMPT + 1, result.getJudgeAttempt());
         verify(questionFeignClient, never()).completeJudgeTask(any());
+    }
+
+    @Test
+    void sandboxAuthenticationFailureStopsRetryingAndMarksSubmissionFailed() {
+        prepareSubmission("[{\"input\":\"\",\"output\":\"1\"}]", QuestionSubmitStatusEnum.FAILED, ATTEMPT);
+        when(codeSandboxFactory.newInstance("remote")).thenReturn(codeSandbox);
+        when(codeSandbox.executeCode(any())).thenThrow(
+                new SandboxConfigurationException("远程代码沙箱认证失败"));
+        when(questionFeignClient.completeJudgeTask(any())).thenReturn(true);
+
+        judgeService.doJudge(message());
+
+        JudgeTaskCompleteRequest completion = completion();
+        assertEquals(QuestionSubmitStatusEnum.FAILED.getValue(), completion.getStatus());
+        assertTrue(completion.getLastError().contains("认证失败"));
+        verify(questionFeignClient, never()).retryJudgeTask(any());
     }
 
     @Test

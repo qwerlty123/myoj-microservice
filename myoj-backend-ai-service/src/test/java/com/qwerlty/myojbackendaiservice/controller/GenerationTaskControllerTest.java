@@ -1,8 +1,8 @@
 package com.qwerlty.myojbackendaiservice.controller;
 
 import com.qwerlty.myojbackendaiservice.exception.BusinessException;
-import com.qwerlty.myojbackendaiservice.model.dto.generation.GenerationRequirements;
-import com.qwerlty.myojbackendaiservice.model.dto.generation.GenerationTaskCreateRequest;
+import com.qwerlty.myojbackendaiservice.model.dto.generation.ProblemDraftRequirements;
+import com.qwerlty.myojbackendaiservice.model.dto.generation.ProblemDraftTaskRequest;
 import com.qwerlty.myojbackendaiservice.model.vo.GenerationTaskVO;
 import com.qwerlty.myojbackendaiservice.service.GenerationTaskService;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,27 +32,30 @@ class GenerationTaskControllerTest {
         task.setTaskId(1L);
         task.setStatus("PENDING");
         task.setStage("QUEUED");
-        when(service.create(any(), anyLong(), anyString())).thenReturn(task);
+        when(service.create(any(), any(), anyLong(), anyString())).thenReturn(task);
     }
 
     @Test
     void refusesNonAdminBeforeCallingService() {
-        assertThatThrownBy(() -> controller.create(request(), UUID.randomUUID().toString(), "7", "user"))
+        assertThatThrownBy(() -> controller.createProblemDraft(
+                draftRequest(), UUID.randomUUID().toString(), "7", "user"))
                 .isInstanceOf(BusinessException.class)
                 .extracting("code")
                 .isEqualTo(40101);
 
-        verify(service, never()).create(any(), anyLong(), anyString());
+        verify(service, never()).create(any(), any(), anyLong(), anyString());
     }
 
     @Test
     void usesOnlyTrustedGatewayIdentityHeadersForAdminRequest() {
         String idempotencyKey = UUID.randomUUID().toString();
 
-        controller.create(request(), idempotencyKey, "7", "admin");
+        controller.createProblemDraft(draftRequest(), idempotencyKey, "7", "admin");
 
-        verify(service).create(any(GenerationTaskCreateRequest.class),
-                org.mockito.ArgumentMatchers.eq(7L), org.mockito.ArgumentMatchers.eq(idempotencyKey));
+        verify(service).create(org.mockito.ArgumentMatchers.eq(
+                        com.qwerlty.myojbackendaiservice.model.enums.AuthoringTaskType.PROBLEM_DRAFT),
+                any(ProblemDraftTaskRequest.class), org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq(idempotencyKey));
     }
 
     @Test
@@ -63,10 +66,11 @@ class GenerationTaskControllerTest {
         verify(service, never()).get(anyLong(), anyLong());
     }
 
-    private GenerationTaskCreateRequest request() {
-        GenerationTaskCreateRequest request = new GenerationTaskCreateRequest();
-        request.setMode("FULL_PROBLEM");
-        request.setRequirements(new GenerationRequirements());
+    private ProblemDraftTaskRequest draftRequest() {
+        ProblemDraftRequirements requirements = new ProblemDraftRequirements();
+        requirements.setTopic("sliding window");
+        ProblemDraftTaskRequest request = new ProblemDraftTaskRequest();
+        request.setRequirements(requirements);
         return request;
     }
 }

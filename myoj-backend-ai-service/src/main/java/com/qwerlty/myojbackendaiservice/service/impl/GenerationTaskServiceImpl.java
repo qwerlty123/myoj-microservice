@@ -2,18 +2,23 @@ package com.qwerlty.myojbackendaiservice.service.impl;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.qwerlty.myojbackendaiservice.common.ErrorCode;
 import com.qwerlty.myojbackendaiservice.exception.BusinessException;
 import com.qwerlty.myojbackendaiservice.generation.GenerationValidationException;
-import com.qwerlty.myojbackendaiservice.generation.ProblemGenerationEngine;
+import com.qwerlty.myojbackendaiservice.generation.workflow.AuthoringArtifact;
+import com.qwerlty.myojbackendaiservice.generation.workflow.AuthoringRequest;
+import com.qwerlty.myojbackendaiservice.generation.workflow.AuthoringWorkflowRegistry;
+import com.qwerlty.myojbackendaiservice.generation.workflow.WorkflowCheckpointStore;
+import com.qwerlty.myojbackendaiservice.generation.workflow.WorkflowContext;
 import com.qwerlty.myojbackendaiservice.manager.GenerationRateLimiter;
 import com.qwerlty.myojbackendaiservice.mapper.AiProblemGenerationTaskMapper;
-import com.qwerlty.myojbackendaiservice.model.dto.generation.GeneratedProblemDraft;
-import com.qwerlty.myojbackendaiservice.model.dto.generation.GenerationArtifact;
-import com.qwerlty.myojbackendaiservice.model.dto.generation.GenerationTaskCreateRequest;
-import com.qwerlty.myojbackendaiservice.model.dto.generation.GenerationValidationReport;
+import com.qwerlty.myojbackendaiservice.model.dto.generation.AuthoringTaskResult;
+import com.qwerlty.myojbackendaiservice.model.dto.generation.ProblemDraftTaskRequest;
+import com.qwerlty.myojbackendaiservice.model.dto.generation.QualityReviewTaskRequest;
+import com.qwerlty.myojbackendaiservice.model.dto.generation.TestCaseTaskRequest;
 import com.qwerlty.myojbackendaiservice.model.entity.AiProblemGenerationTask;
-import com.qwerlty.myojbackendaiservice.model.enums.GenerationMode;
+import com.qwerlty.myojbackendaiservice.model.enums.AuthoringTaskType;
 import com.qwerlty.myojbackendaiservice.model.enums.GenerationStage;
 import com.qwerlty.myojbackendaiservice.model.enums.GenerationStatus;
 import com.qwerlty.myojbackendaiservice.model.vo.GenerationTaskPageVO;
@@ -52,47 +57,54 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
     private final AiProblemGenerationTaskMapper taskMapper;
     private final GenerationRateLimiter rateLimiter;
     private final GenerationStreamManager streamManager;
-    private final ProblemGenerationEngine generationEngine;
+    private final AuthoringWorkflowRegistry workflowRegistry;
     private final ObjectMapper objectMapper;
     private final ExecutorService executor;
     private final MeterRegistry meterRegistry;
     private final String modelName;
     private final String promptVersion;
     private final int maxAttempts;
-    private final long taskTimeoutMs;
+    private final long problemDraftTimeoutMs;
+    private final long testCasesTimeoutMs;
+    private final long qualityReviewTimeoutMs;
 
     public GenerationTaskServiceImpl(
             AiProblemGenerationTaskMapper taskMapper,
             GenerationRateLimiter rateLimiter,
             GenerationStreamManager streamManager,
-            ProblemGenerationEngine generationEngine,
+            AuthoringWorkflowRegistry workflowRegistry,
             ObjectMapper objectMapper,
             @Qualifier("problemGenerationExecutor") ExecutorService executor,
             MeterRegistry meterRegistry,
             @Value("${myoj.ai.model-name}") String modelName,
             @Value("${myoj.ai.generation.prompt-version:v1}") String promptVersion,
             @Value("${myoj.ai.generation.max-attempts:3}") int maxAttempts,
-            @Value("${myoj.ai.generation.task-timeout-ms:900000}") long taskTimeoutMs) {
+            @Value("${myoj.ai.generation.workflow.problem-draft-timeout-ms:720000}") long problemDraftTimeoutMs,
+            @Value("${myoj.ai.generation.workflow.test-cases-timeout-ms:1080000}") long testCasesTimeoutMs,
+            @Value("${myoj.ai.generation.workflow.quality-review-timeout-ms:900000}") long qualityReviewTimeoutMs) {
         this.taskMapper = taskMapper;
         this.rateLimiter = rateLimiter;
         this.streamManager = streamManager;
-        this.generationEngine = generationEngine;
+        this.workflowRegistry = workflowRegistry;
         this.objectMapper = objectMapper;
         this.executor = executor;
         this.meterRegistry = meterRegistry;
         this.modelName = modelName;
         this.promptVersion = promptVersion;
         this.maxAttempts = maxAttempts;
-        this.taskTimeoutMs = taskTimeoutMs;
+        this.problemDraftTimeoutMs = problemDraftTimeoutMs;
+        this.testCasesTimeoutMs = testCasesTimeoutMs;
+        this.qualityReviewTimeoutMs = qualityReviewTimeoutMs;
     }
 
     @Override
-    public GenerationTaskVO create(GenerationTaskCreateRequest request,
+    public GenerationTaskVO create(AuthoringTaskType type,
+                                   AuthoringRequest request,
                                    Long userId,
                                    String idempotencyKey) {
-        validateCreate(request, userId, idempotencyKey);
-        log.info("[AI_GENERATION] create validated userId={} mode={} model={} promptVersion={}",
-                userId, request.getMode(), modelName, promptVersion);
+        validateCreate(type, request, userId, idempotencyKey);
+        log.info("[AI_GENERATION] create validated userId={} type={} model={} promptVersion={}",
+                userId, type, modelName, promptVersion);
         String requestKey = sha256(userId + ":" + idempotencyKey);
         AiProblemGenerationTask existing = taskMapper.selectByRequestKey(requestKey);
         if (existing != null) {
@@ -111,7 +123,7 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
         AiProblemGenerationTask task = new AiProblemGenerationTask();
         task.setRequestKey(requestKey);
         task.setUserId(userId);
-        task.setMode(request.getMode());
+        task.setMode(type.name());
         task.setStatus(GenerationStatus.PENDING.getValue());
         task.setStage(GenerationStage.QUEUED.name());
         task.setProgress(0);
@@ -139,7 +151,7 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
         } catch (RuntimeException exception) {
             rateLimiter.refund(userId);
             log.error("[AI_GENERATION] task persistence failed userId={} mode={} errorType={}",
-                    userId, request.getMode(), exception.getClass().getSimpleName(), exception);
+                    userId, type, exception.getClass().getSimpleName(), exception);
             throw exception;
         }
         meterRegistry.counter("ai_generation_tasks_total", "outcome", "created").increment();
@@ -153,14 +165,15 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
     }
 
     @Override
-    public GenerationTaskPageVO history(Long userId, int current, int pageSize) {
+    public GenerationTaskPageVO history(Long userId, int current, int pageSize, AuthoringTaskType type) {
         requirePositive(userId);
         if (current <= 0 || pageSize <= 0 || pageSize > 50) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "分页参数不合法");
         }
-        long total = taskMapper.countHistory(userId);
+        String storedType = type == null ? null : type.name();
+        long total = taskMapper.countHistoryByType(userId, storedType);
         long offset = (long) (current - 1) * pageSize;
-        List<GenerationTaskVO> records = taskMapper.listHistory(userId, offset, pageSize)
+        List<GenerationTaskVO> records = taskMapper.listHistoryByType(userId, storedType, offset, pageSize)
                 .stream().map(this::toVO).toList();
         return new GenerationTaskPageVO(records, total, current, pageSize);
     }
@@ -224,19 +237,22 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
             return;
         }
         long started = System.nanoTime();
-        Future<GenerationArtifact> future = null;
-        log.info("[AI_GENERATION] execution started taskId={} mode={} attempt={} timeoutMs={}",
-                taskId, task.getMode(), task.getAttemptCount(), taskTimeoutMs);
+        Future<AuthoringArtifact> future = null;
+        AuthoringTaskType taskType = AuthoringTaskType.parse(task.getMode());
+        long taskTimeoutMs = timeoutMs(taskType);
+        log.info("[AI_GENERATION] execution started taskId={} type={} attempt={} timeoutMs={}",
+                taskId, taskType, task.getAttemptCount(), taskTimeoutMs);
         try {
-            GenerationTaskCreateRequest request = objectMapper.readValue(
-                    task.getRequestJson(), GenerationTaskCreateRequest.class);
-            future = executor.submit(() -> generationEngine.generate(taskId, request, stage -> {
+            AuthoringRequest request = readRequest(taskType, task.getRequestJson());
+            WorkflowContext workflowContext = new WorkflowContext(taskId, task.getPromptVersion(),
+                    taskTimeoutMs, objectMapper, stage -> {
                 int updated = taskMapper.updateStage(taskId, stage.name(), stage.getProgress());
                 log.info("[AI_GENERATION] stage updated taskId={} stage={} progress={} databaseUpdated={}",
                         taskId, stage.name(), stage.getProgress(), updated > 0);
-            }));
+            }, WorkflowCheckpointStore.noop(), () -> cancellationRequested(taskId), meterRegistry);
+            future = executor.submit(() -> workflowRegistry.execute(taskType, workflowContext, request));
             log.info("[AI_GENERATION] worker submitted taskId={}", taskId);
-            GenerationArtifact artifact = future.get(taskTimeoutMs, TimeUnit.MILLISECONDS);
+            AuthoringArtifact artifact = future.get(taskTimeoutMs, TimeUnit.MILLISECONDS);
             long latency = elapsedMillis(started);
             log.info("[AI_GENERATION] generation engine returned taskId={} latencyMs={}", taskId, latency);
             AiProblemGenerationTask current = taskMapper.selectById(taskId);
@@ -248,7 +264,7 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
                 return;
             }
             int updated = taskMapper.markReviewRequired(taskId,
-                    writeJson(artifact.getDraft()), writeJson(artifact.getValidation()), latency);
+                    writeJson(AuthoringTaskResult.of(taskType, artifact)), null, latency);
             if (updated > 0) {
                 meterRegistry.counter("ai_generation_tasks_total", "outcome", "review_required").increment();
                 meterRegistry.timer("ai_generation_duration").record(latency, TimeUnit.MILLISECONDS);
@@ -319,9 +335,10 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
                 current.getId(), attempts, errorCode, throwable.getClass().getSimpleName(), latency, throwable);
     }
 
-    private void validateCreate(GenerationTaskCreateRequest request, Long userId, String idempotencyKey) {
+    private void validateCreate(AuthoringTaskType type, AuthoringRequest request,
+                                Long userId, String idempotencyKey) {
         requirePositive(userId);
-        if (request == null || request.getRequirements() == null) {
+        if (type == null || request == null || !workflowRegistry.requestType(type).isInstance(request)) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
         try {
@@ -329,19 +346,18 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
         } catch (Exception exception) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "X-Idempotency-Key 必须是 UUID");
         }
-        GenerationMode mode;
-        try {
-            mode = GenerationMode.valueOf(request.getMode());
-        } catch (Exception exception) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR, "生成模式不合法");
-        }
-        if (mode == GenerationMode.FULL_PROBLEM
-                && (request.getRequirements().getTopic() == null
-                || request.getRequirements().getTopic().isBlank())) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR, "自动出题必须填写主题");
-        }
-        if (mode == GenerationMode.TEST_CASES && request.getSourceDraft() == null) {
+        if (type == AuthoringTaskType.PROBLEM_DRAFT) {
+            ProblemDraftTaskRequest draft = (ProblemDraftTaskRequest) request;
+            if (draft.getRequirements() == null || draft.getRequirements().getTopic() == null
+                    || draft.getRequirements().getTopic().isBlank()) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "自动出题必须填写主题");
+            }
+        } else if (type == AuthoringTaskType.TEST_CASES
+                && ((TestCaseTaskRequest) request).getSourceDraft() == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "生成测试用例必须提供题目草稿");
+        } else if (type == AuthoringTaskType.QUALITY_REVIEW
+                && ((QualityReviewTaskRequest) request).getSourceDraft() == null) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "AI 质检必须提供题目草稿");
         }
     }
 
@@ -365,7 +381,7 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
         }
         GenerationTaskVO result = new GenerationTaskVO();
         result.setTaskId(task.getId());
-        result.setMode(task.getMode());
+        result.setTaskType(task.getMode());
         GenerationStatus status = GenerationStatus.fromValue(task.getStatus());
         result.setStatus(status == null ? "UNKNOWN" : status.name());
         result.setStage(task.getStage());
@@ -375,10 +391,7 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
         result.setCreateTime(task.getCreateTime());
         result.setUpdateTime(task.getUpdateTime());
         if (task.getResultJson() != null) {
-            result.setDraft(readJson(task.getResultJson(), GeneratedProblemDraft.class));
-        }
-        if (task.getValidationJson() != null) {
-            result.setValidation(readJson(task.getValidationJson(), GenerationValidationReport.class));
+            result.setResult(readTree(task.getResultJson()));
         }
         return result;
     }
@@ -407,6 +420,35 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("生成任务数据无法解析", exception);
         }
+    }
+
+    private AuthoringRequest readRequest(AuthoringTaskType type, String value) {
+        try {
+            return objectMapper.readValue(value, workflowRegistry.requestType(type));
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("AI 题目创作请求无法解析", exception);
+        }
+    }
+
+    private JsonNode readTree(String value) {
+        try {
+            return objectMapper.readTree(value);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("AI 题目创作结果无法解析", exception);
+        }
+    }
+
+    private boolean cancellationRequested(Long taskId) {
+        AiProblemGenerationTask current = taskMapper.selectById(taskId);
+        return current == null || Integer.valueOf(1).equals(current.getCancelRequested());
+    }
+
+    private long timeoutMs(AuthoringTaskType type) {
+        return switch (type) {
+            case PROBLEM_DRAFT -> problemDraftTimeoutMs;
+            case TEST_CASES -> testCasesTimeoutMs;
+            case QUALITY_REVIEW -> qualityReviewTimeoutMs;
+        };
     }
 
     private Long requirePositive(Long value) {

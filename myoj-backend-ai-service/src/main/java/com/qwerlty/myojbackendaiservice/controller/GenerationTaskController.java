@@ -4,7 +4,10 @@ import com.qwerlty.myojbackendaiservice.common.BaseResponse;
 import com.qwerlty.myojbackendaiservice.common.ErrorCode;
 import com.qwerlty.myojbackendaiservice.common.ResultUtils;
 import com.qwerlty.myojbackendaiservice.exception.BusinessException;
-import com.qwerlty.myojbackendaiservice.model.dto.generation.GenerationTaskCreateRequest;
+import com.qwerlty.myojbackendaiservice.model.dto.generation.ProblemDraftTaskRequest;
+import com.qwerlty.myojbackendaiservice.model.dto.generation.QualityReviewTaskRequest;
+import com.qwerlty.myojbackendaiservice.model.dto.generation.TestCaseTaskRequest;
+import com.qwerlty.myojbackendaiservice.model.enums.AuthoringTaskType;
 import com.qwerlty.myojbackendaiservice.model.vo.GenerationTaskPageVO;
 import com.qwerlty.myojbackendaiservice.model.vo.GenerationTaskVO;
 import com.qwerlty.myojbackendaiservice.service.GenerationTaskService;
@@ -32,20 +35,31 @@ public class GenerationTaskController {
         this.taskService = taskService;
     }
 
-    @PostMapping
-    public BaseResponse<GenerationTaskVO> create(
-            @Valid @RequestBody GenerationTaskCreateRequest request,
+    @PostMapping("/problem-drafts")
+    public BaseResponse<GenerationTaskVO> createProblemDraft(
+            @Valid @RequestBody ProblemDraftTaskRequest request,
             @RequestHeader("X-Idempotency-Key") String idempotencyKey,
             @RequestHeader("X-user-Id") String userId,
             @RequestHeader("X-user-Role") String role) {
-        requireAdmin(role);
-        Long parsedUserId = parseUserId(userId);
-        log.info("[AI_GENERATION] create request received userId={} mode={}",
-                parsedUserId, request.getMode());
-        GenerationTaskVO task = taskService.create(request, parsedUserId, idempotencyKey);
-        log.info("[AI_GENERATION] create request completed taskId={} status={} stage={}",
-                task.getTaskId(), task.getStatus(), task.getStage());
-        return ResultUtils.success(task);
+        return create(AuthoringTaskType.PROBLEM_DRAFT, request, idempotencyKey, userId, role);
+    }
+
+    @PostMapping("/test-cases")
+    public BaseResponse<GenerationTaskVO> createTestCases(
+            @Valid @RequestBody TestCaseTaskRequest request,
+            @RequestHeader("X-Idempotency-Key") String idempotencyKey,
+            @RequestHeader("X-user-Id") String userId,
+            @RequestHeader("X-user-Role") String role) {
+        return create(AuthoringTaskType.TEST_CASES, request, idempotencyKey, userId, role);
+    }
+
+    @PostMapping("/quality-reviews")
+    public BaseResponse<GenerationTaskVO> createQualityReview(
+            @Valid @RequestBody QualityReviewTaskRequest request,
+            @RequestHeader("X-Idempotency-Key") String idempotencyKey,
+            @RequestHeader("X-user-Id") String userId,
+            @RequestHeader("X-user-Role") String role) {
+        return create(AuthoringTaskType.QUALITY_REVIEW, request, idempotencyKey, userId, role);
     }
 
     @GetMapping("/{taskId}")
@@ -64,10 +78,12 @@ public class GenerationTaskController {
     public BaseResponse<GenerationTaskPageVO> history(
             @RequestParam(defaultValue = "1") @Positive int current,
             @RequestParam(defaultValue = "10") @Positive int pageSize,
+            @RequestParam(required = false) String type,
             @RequestHeader("X-user-Id") String userId,
             @RequestHeader("X-user-Role") String role) {
         requireAdmin(role);
-        return ResultUtils.success(taskService.history(parseUserId(userId), current, pageSize));
+        AuthoringTaskType taskType = type == null || type.isBlank() ? null : parseType(type);
+        return ResultUtils.success(taskService.history(parseUserId(userId), current, pageSize, taskType));
     }
 
     @PostMapping("/{taskId}/retry")
@@ -93,6 +109,26 @@ public class GenerationTaskController {
     private void requireAdmin(String role) {
         if (!"admin".equals(role)) {
             throw new BusinessException(ErrorCode.NO_AUTH_ERROR);
+        }
+    }
+
+    private BaseResponse<GenerationTaskVO> create(AuthoringTaskType type,
+                                                   com.qwerlty.myojbackendaiservice.generation.workflow.AuthoringRequest request,
+                                                   String idempotencyKey,
+                                                   String userId,
+                                                   String role) {
+        requireAdmin(role);
+        Long parsedUserId = parseUserId(userId);
+        log.info("[AI_GENERATION] create request received userId={} type={}", parsedUserId, type);
+        GenerationTaskVO task = taskService.create(type, request, parsedUserId, idempotencyKey);
+        return ResultUtils.success(task);
+    }
+
+    private AuthoringTaskType parseType(String value) {
+        try {
+            return AuthoringTaskType.valueOf(value);
+        } catch (IllegalArgumentException exception) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "任务类型不合法");
         }
     }
 

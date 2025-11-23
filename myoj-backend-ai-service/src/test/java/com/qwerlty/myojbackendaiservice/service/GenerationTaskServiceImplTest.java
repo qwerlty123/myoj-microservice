@@ -2,17 +2,18 @@ package com.qwerlty.myojbackendaiservice.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qwerlty.myojbackendaiservice.exception.BusinessException;
-import com.qwerlty.myojbackendaiservice.generation.ProblemGenerationEngine;
+import com.qwerlty.myojbackendaiservice.generation.workflow.AuthoringWorkflowRegistry;
 import com.qwerlty.myojbackendaiservice.generation.GenerationValidationException;
 import com.qwerlty.myojbackendaiservice.manager.GenerationRateLimiter;
 import com.qwerlty.myojbackendaiservice.mapper.AiProblemGenerationTaskMapper;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.GeneratedProblemDraft;
-import com.qwerlty.myojbackendaiservice.model.dto.generation.GenerationArtifact;
-import com.qwerlty.myojbackendaiservice.model.dto.generation.GenerationRequirements;
-import com.qwerlty.myojbackendaiservice.model.dto.generation.GenerationTaskCreateRequest;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.GenerationValidationReport;
+import com.qwerlty.myojbackendaiservice.model.dto.generation.ProblemDraftArtifact;
+import com.qwerlty.myojbackendaiservice.model.dto.generation.ProblemDraftRequirements;
+import com.qwerlty.myojbackendaiservice.model.dto.generation.ProblemDraftTaskRequest;
 import com.qwerlty.myojbackendaiservice.model.entity.AiProblemGenerationTask;
 import com.qwerlty.myojbackendaiservice.model.enums.GenerationStatus;
+import com.qwerlty.myojbackendaiservice.model.enums.AuthoringTaskType;
 import com.qwerlty.myojbackendaiservice.queue.GenerationStreamManager;
 import com.qwerlty.myojbackendaiservice.sandbox.SandboxConfigurationException;
 import com.qwerlty.myojbackendaiservice.service.impl.GenerationTaskServiceImpl;
@@ -33,8 +34,10 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -43,7 +46,7 @@ class GenerationTaskServiceImplTest {
     private AiProblemGenerationTaskMapper mapper;
     private GenerationRateLimiter limiter;
     private GenerationStreamManager stream;
-    private ProblemGenerationEngine engine;
+    private AuthoringWorkflowRegistry registry;
     private ExecutorService executor;
     private ObjectMapper objectMapper;
     private GenerationTaskServiceImpl service;
@@ -53,11 +56,13 @@ class GenerationTaskServiceImplTest {
         mapper = mock(AiProblemGenerationTaskMapper.class);
         limiter = mock(GenerationRateLimiter.class);
         stream = mock(GenerationStreamManager.class);
-        engine = mock(ProblemGenerationEngine.class);
+        registry = mock(AuthoringWorkflowRegistry.class);
+        doReturn(ProblemDraftTaskRequest.class).when(registry).requestType(AuthoringTaskType.PROBLEM_DRAFT);
         executor = Executors.newSingleThreadExecutor();
         objectMapper = new ObjectMapper();
-        service = new GenerationTaskServiceImpl(mapper, limiter, stream, engine,
-                objectMapper, executor, new SimpleMeterRegistry(), "test-model", "generation-v1", 3, 5_000L);
+        service = new GenerationTaskServiceImpl(mapper, limiter, stream, registry,
+                objectMapper, executor, new SimpleMeterRegistry(), "test-model", "generation-v1", 3,
+                5_000L, 5_000L, 5_000L);
     }
 
     @AfterEach
@@ -70,7 +75,8 @@ class GenerationTaskServiceImplTest {
         AiProblemGenerationTask existing = task(101L, 7L, GenerationStatus.PENDING);
         when(mapper.selectByRequestKey(anyString())).thenReturn(existing);
 
-        assertThat(service.create(request(), 7L, UUID.randomUUID().toString()).getTaskId()).isEqualTo(101L);
+        assertThat(service.create(AuthoringTaskType.PROBLEM_DRAFT, request(), 7L,
+                UUID.randomUUID().toString()).getTaskId()).isEqualTo(101L);
 
         verify(limiter, never()).tryAcquire(anyLong());
         verify(mapper, never()).insert(any(AiProblemGenerationTask.class));
@@ -87,7 +93,8 @@ class GenerationTaskServiceImplTest {
         });
         when(stream.enqueue(102L)).thenThrow(new IllegalStateException("redis unavailable"));
 
-        var result = service.create(request(), 7L, UUID.randomUUID().toString());
+        var result = service.create(AuthoringTaskType.PROBLEM_DRAFT, request(), 7L,
+                UUID.randomUUID().toString());
 
         assertThat(result.getTaskId()).isEqualTo(102L);
         assertThat(result.getStatus()).isEqualTo("PENDING");
@@ -97,7 +104,8 @@ class GenerationTaskServiceImplTest {
 
     @Test
     void rejectsMalformedIdempotencyKeyBeforeRateLimitOrPersistence() {
-        assertThatThrownBy(() -> service.create(request(), 7L, "not-a-uuid"))
+        assertThatThrownBy(() -> service.create(
+                AuthoringTaskType.PROBLEM_DRAFT, request(), 7L, "not-a-uuid"))
                 .isInstanceOf(BusinessException.class);
 
         verify(limiter, never()).tryAcquire(anyLong());
@@ -109,13 +117,14 @@ class GenerationTaskServiceImplTest {
         AiProblemGenerationTask running = task(103L, 7L, GenerationStatus.RUNNING);
         running.setRequestJson(objectMapper.writeValueAsString(request()));
         when(mapper.selectById(103L)).thenReturn(running);
-        when(engine.generate(anyLong(), any(), any())).thenReturn(
-                new GenerationArtifact(new GeneratedProblemDraft(), new GenerationValidationReport()));
-        when(mapper.markReviewRequired(anyLong(), anyString(), anyString(), anyLong())).thenReturn(1);
+        when(registry.execute(eq(AuthoringTaskType.PROBLEM_DRAFT), any(), any())).thenReturn(
+                new ProblemDraftArtifact(new GeneratedProblemDraft(),
+                        new GenerationValidationReport(), java.util.List.of(), false));
+        when(mapper.markReviewRequired(anyLong(), anyString(), isNull(), anyLong())).thenReturn(1);
 
         service.execute(103L);
 
-        verify(mapper).markReviewRequired(anyLong(), anyString(), anyString(), anyLong());
+        verify(mapper).markReviewRequired(anyLong(), anyString(), isNull(), anyLong());
         verify(mapper, never()).markTerminal(anyLong(),
                 org.mockito.ArgumentMatchers.eq(GenerationStatus.FAILED.getValue()),
                 any(), any(), anyLong());
@@ -127,7 +136,8 @@ class GenerationTaskServiceImplTest {
         running.setAttemptCount(1);
         running.setRequestJson(objectMapper.writeValueAsString(request()));
         when(mapper.selectById(104L)).thenReturn(running);
-        when(engine.generate(anyLong(), any(), any())).thenThrow(new TransientAiException("temporary"));
+        when(registry.execute(eq(AuthoringTaskType.PROBLEM_DRAFT), any(), any()))
+                .thenThrow(new TransientAiException("temporary"));
         when(mapper.markRetry(104L, "MODEL_UNAVAILABLE", "模型服务暂时不可用")).thenReturn(1);
 
         service.execute(104L);
@@ -142,7 +152,7 @@ class GenerationTaskServiceImplTest {
         running.setAttemptCount(1);
         running.setRequestJson(objectMapper.writeValueAsString(request()));
         when(mapper.selectById(105L)).thenReturn(running);
-        when(engine.generate(anyLong(), any(), any()))
+        when(registry.execute(eq(AuthoringTaskType.PROBLEM_DRAFT), any(), any()))
                 .thenThrow(new GenerationValidationException("三语言输出不一致"));
         when(mapper.markRetry(105L, "QUALITY_GATE_FAILED", "三语言输出不一致")).thenReturn(1);
 
@@ -158,7 +168,7 @@ class GenerationTaskServiceImplTest {
         running.setAttemptCount(1);
         running.setRequestJson(objectMapper.writeValueAsString(request()));
         when(mapper.selectById(106L)).thenReturn(running);
-        when(engine.generate(anyLong(), any(), any()))
+        when(registry.execute(eq(AuthoringTaskType.PROBLEM_DRAFT), any(), any()))
                 .thenThrow(new SandboxConfigurationException("沙箱运行时缺少编译命令: go"));
 
         service.execute(106L);
@@ -169,12 +179,10 @@ class GenerationTaskServiceImplTest {
         verify(stream, never()).enqueue(106L);
     }
 
-    private GenerationTaskCreateRequest request() {
-        GenerationRequirements requirements = new GenerationRequirements();
+    private ProblemDraftTaskRequest request() {
+        ProblemDraftRequirements requirements = new ProblemDraftRequirements();
         requirements.setTopic("sliding window");
-        requirements.setCaseCount(10);
-        GenerationTaskCreateRequest request = new GenerationTaskCreateRequest();
-        request.setMode("FULL_PROBLEM");
+        ProblemDraftTaskRequest request = new ProblemDraftTaskRequest();
         request.setRequirements(requirements);
         return request;
     }
@@ -183,7 +191,8 @@ class GenerationTaskServiceImplTest {
         AiProblemGenerationTask task = new AiProblemGenerationTask();
         task.setId(id);
         task.setUserId(userId);
-        task.setMode("FULL_PROBLEM");
+        task.setMode("PROBLEM_DRAFT");
+        task.setPromptVersion("generation-v1");
         task.setStatus(status.getValue());
         task.setStage(status == GenerationStatus.PENDING ? "QUEUED" : "GENERATING_SPEC");
         task.setProgress(status == GenerationStatus.PENDING ? 0 : 10);

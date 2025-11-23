@@ -13,4 +13,5 @@ public class GeneratedProblemSpec {
     private List<String> tags = new ArrayList<>();
     private String solutionExplanation;
     private JudgeConfigValue judgeConfig;
+    private List<GeneratedTestInput> sampleInputs = new ArrayList<>();
 }

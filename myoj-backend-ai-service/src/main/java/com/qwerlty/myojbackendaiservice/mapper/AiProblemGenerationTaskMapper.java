@@ -23,6 +23,23 @@ public interface AiProblemGenerationTaskMapper extends BaseMapper<AiProblemGener
                                               @Param("offset") long offset,
                                               @Param("pageSize") int pageSize);
 
+    @Select({"<script>",
+            "select count(*) from ai_problem_generation_task where userId = #{userId}",
+            "<if test='type != null'> and mode = #{type}</if>",
+            "</script>"})
+    long countHistoryByType(@Param("userId") Long userId, @Param("type") String type);
+
+    @Select({"<script>",
+            "select id, userId, mode, status, stage, progress, resultJson, errorCode, lastError, createTime, updateTime ",
+            "from ai_problem_generation_task where userId = #{userId}",
+            "<if test='type != null'> and mode = #{type}</if>",
+            "order by createTime desc limit #{offset}, #{pageSize}",
+            "</script>"})
+    List<AiProblemGenerationTask> listHistoryByType(@Param("userId") Long userId,
+                                                    @Param("type") String type,
+                                                    @Param("offset") long offset,
+                                                    @Param("pageSize") int pageSize);
+
     @Select("select id from ai_problem_generation_task where status = 0 and cancelRequested = 0 "
             + "order by createTime asc limit #{limit}")
     List<AiProblemGenerationTask> listPending(@Param("limit") int limit);

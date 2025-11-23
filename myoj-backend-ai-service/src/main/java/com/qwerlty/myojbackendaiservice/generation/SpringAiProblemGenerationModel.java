@@ -3,9 +3,9 @@ package com.qwerlty.myojbackendaiservice.generation;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.GeneratedProblemSpec;
-import com.qwerlty.myojbackendaiservice.model.dto.generation.GenerationRequirements;
+import com.qwerlty.myojbackendaiservice.model.dto.generation.CoveragePlan;
+import com.qwerlty.myojbackendaiservice.model.dto.generation.ProblemDraftRequirements;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.ReferenceSolution;
-import com.qwerlty.myojbackendaiservice.model.dto.generation.TestInputPlan;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.ValidationPrograms;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -32,16 +32,17 @@ public class SpringAiProblemGenerationModel implements ProblemGenerationModel {
     }
 
     @Override
-    public GeneratedProblemSpec generateSpecification(GenerationRequirements requirements) {
+    public GeneratedProblemSpec generateDraftSpecification(ProblemDraftRequirements requirements) {
         String prompt = """
-                根据下面的生成要求设计一道原创算法题。
-                content 必须是完整中文 Markdown，包含题目描述、输入格式、输出格式、数据范围和至少两个示例。
+                根据下面要求设计一道原创算法题。
+                content 必须是完整中文 Markdown，只包含题目描述、输入格式、输出格式和数据范围，不写示例。
+                sampleInputs 必须提供 2 到 3 组互不重复、可由朴素算法验证的小规模输入；不得提供输出。
                 difficulty 只能为 0、1、2。judgeConfig 使用毫秒和 KB。
                 solutionExplanation 给出正确算法、正确性说明和复杂度，不包含完整代码。
                 <requirements>%s</requirements>
                 """.formatted(json(requirements));
         return required(chatClient.prompt().system(SYSTEM).user(prompt).call()
-                .entity(GeneratedProblemSpec.class), "题目规格");
+                .entity(GeneratedProblemSpec.class), "题目草稿规格");
     }
 
     @Override
@@ -79,18 +80,16 @@ public class SpringAiProblemGenerationModel implements ProblemGenerationModel {
     }
 
     @Override
-    public TestInputPlan generateTestInputs(GeneratedProblemSpec specification,
-                                            GenerationRequirements requirements) {
+    public CoveragePlan generateCoveragePlan(GeneratedProblemSpec specification, String constraints) {
         String prompt = """
-                为下列题目生成 %d 组互不重复的完整标准输入。
-                category 只能是 EXAMPLE、NORMAL、BOUNDARY、MAXIMUM、ADVERSARIAL。
-                必须覆盖五种类别；大规模或可能让朴素解超时的用例将 oracleEligible 设为 false，其余设为 true。
-                input 只能包含实际输入文本，不能包含解释、代码块标记或期望输出。
+                分析题目最容易漏测的算法风险，生成动态覆盖计划。
+                dynamicRisks 最多 8 项，每项 id 使用简短英文标识，description 使用中文说明。
+                固定的 NORMAL、BOUNDARY、MAXIMUM、ADVERSARIAL 类别无需重复列出。
                 <problem>%s</problem>
-                <requirements>%s</requirements>
-                """.formatted(requirements.getCaseCount(), json(specification), json(requirements));
+                <focus>%s</focus>
+                """.formatted(json(specification), constraints == null ? "" : constraints);
         return required(chatClient.prompt().system(SYSTEM).user(prompt).call()
-                .entity(TestInputPlan.class), "测试输入");
+                .entity(CoveragePlan.class), "动态覆盖计划");
     }
 
     private <T> T required(T value, String name) {

@@ -47,4 +47,12 @@ public class SpringAiConfig {
     public ChatClient problemGenerationChatClient(ChatModel chatModel) {
         return ChatClient.builder(chatModel).build();
     }
+
+    /** 题目创作 Agent 仅启用 Tool Calling，明确不接入 RetrievalAugmentationAdvisor。 */
+    @Bean("authoringAgentChatClient")
+    public ChatClient authoringAgentChatClient(ChatModel chatModel) {
+        return ChatClient.builder(chatModel)
+                .defaultAdvisors(ToolCallAdvisor.builder().build())
+                .build();
+    }
 }

@@ -44,7 +44,7 @@ public interface AiProblemGenerationTaskMapper extends BaseMapper<AiProblemGener
             + "order by createTime asc limit #{limit}")
     List<AiProblemGenerationTask> listPending(@Param("limit") int limit);
 
-    @Update("update ai_problem_generation_task set status = 1, stage = 'GENERATING_SPEC', progress = 10, "
+    @Update("update ai_problem_generation_task set status = 1, stage = 'QUEUED', progress = 1, "
             + "attemptCount = attemptCount + 1, startedTime = now(), finishedTime = null, "
             + "errorCode = null, lastError = null, updateTime = now(), version = version + 1 "
             + "where id = #{id} and status = 0 and cancelRequested = 0")
@@ -56,13 +56,29 @@ public interface AiProblemGenerationTaskMapper extends BaseMapper<AiProblemGener
                     @Param("stage") String stage,
                     @Param("progress") int progress);
 
+    @Update("update ai_problem_generation_task set workflowStateJson = #{workflowStateJson}, "
+            + "stage = #{stage}, progress = #{progress}, updateTime = now(), version = version + 1 "
+            + "where id = #{id} and status = 1")
+    int updateCheckpoint(@Param("id") Long id,
+                         @Param("workflowStateJson") String workflowStateJson,
+                         @Param("stage") String stage,
+                         @Param("progress") int progress);
+
+    @Update("update ai_problem_generation_task set workflowStateJson = null, "
+            + "updateTime = now(), version = version + 1 where id = #{id}")
+    int clearCheckpoint(@Param("id") Long id);
+
+    @Update("update ai_problem_generation_task set promptVersion = #{promptVersion}, workflowStateJson = null, "
+            + "updateTime = now(), version = version + 1 where id = #{id} and status = 1")
+    int replacePromptVersionAndClearCheckpoint(@Param("id") Long id,
+                                               @Param("promptVersion") String promptVersion);
+
     @Update("update ai_problem_generation_task set status = 2, stage = 'COMPLETED', progress = 100, "
-            + "resultJson = #{resultJson}, validationJson = #{validationJson}, latencyMs = #{latencyMs}, "
+            + "resultJson = #{resultJson}, validationJson = null, workflowStateJson = null, latencyMs = #{latencyMs}, "
             + "finishedTime = now(), errorCode = null, lastError = null, updateTime = now(), version = version + 1 "
             + "where id = #{id} and status = 1 and cancelRequested = 0")
     int markReviewRequired(@Param("id") Long id,
                            @Param("resultJson") String resultJson,
-                           @Param("validationJson") String validationJson,
                            @Param("latencyMs") long latencyMs);
 
     @Update("update ai_problem_generation_task set status = 0, stage = 'QUEUED', progress = 0, "
@@ -83,9 +99,14 @@ public interface AiProblemGenerationTaskMapper extends BaseMapper<AiProblemGener
 
     @Update("update ai_problem_generation_task set status = 0, stage = 'QUEUED', progress = 0, "
             + "resultJson = null, validationJson = null, startedTime = null, finishedTime = null, "
-            + "cancelRequested = 0, errorCode = null, lastError = null, updateTime = now(), version = version + 1 "
+            + "cancelRequested = 0, errorCode = null, lastError = null, promptVersion = #{promptVersion}, "
+            + "workflowStateJson = case when #{clearCheckpoint} = 1 then null else workflowStateJson end, "
+            + "updateTime = now(), version = version + 1 "
             + "where id = #{id} and userId = #{userId} and status in (3, 4)")
-    int resetForRetry(@Param("id") Long id, @Param("userId") Long userId);
+    int resetForRetry(@Param("id") Long id,
+                      @Param("userId") Long userId,
+                      @Param("promptVersion") String promptVersion,
+                      @Param("clearCheckpoint") int clearCheckpoint);
 
     @Update("update ai_problem_generation_task set status = 5, finishedTime = now(), "
             + "errorCode = null, lastError = null, updateTime = now(), version = version + 1 "

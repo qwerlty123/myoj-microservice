@@ -30,7 +30,7 @@ public class GenerationRecoveryJob {
             GenerationStreamManager streamManager,
             GenerationStreamConsumer streamConsumer,
             @Value("${myoj.ai.generation.max-attempts:3}") int maxAttempts,
-            @Value("${myoj.ai.generation.running-timeout-ms:1200000}") long runningTimeoutMs,
+            @Value("${myoj.ai.generation.running-timeout-ms:1380000}") long runningTimeoutMs,
             @Value("${myoj.ai.generation.stream.reclaim-batch-size:20}") int batchSize,
             @Value("${myoj.ai.generation.stream.consumer-prefix:${HOSTNAME:ai-generation}}") String prefix) {
         this.taskMapper = taskMapper;

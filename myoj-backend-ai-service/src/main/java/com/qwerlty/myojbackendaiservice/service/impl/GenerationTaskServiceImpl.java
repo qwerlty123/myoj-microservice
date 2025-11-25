@@ -6,10 +6,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.qwerlty.myojbackendaiservice.common.ErrorCode;
 import com.qwerlty.myojbackendaiservice.exception.BusinessException;
 import com.qwerlty.myojbackendaiservice.generation.GenerationValidationException;
+import com.qwerlty.myojbackendaiservice.generation.checkpoint.DatabaseWorkflowCheckpointStore;
 import com.qwerlty.myojbackendaiservice.generation.workflow.AuthoringArtifact;
 import com.qwerlty.myojbackendaiservice.generation.workflow.AuthoringRequest;
 import com.qwerlty.myojbackendaiservice.generation.workflow.AuthoringWorkflowRegistry;
-import com.qwerlty.myojbackendaiservice.generation.workflow.WorkflowCheckpointStore;
 import com.qwerlty.myojbackendaiservice.generation.workflow.WorkflowContext;
 import com.qwerlty.myojbackendaiservice.manager.GenerationRateLimiter;
 import com.qwerlty.myojbackendaiservice.mapper.AiProblemGenerationTaskMapper;
@@ -42,6 +42,7 @@ import java.security.MessageDigest;
 import java.util.Date;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -154,7 +155,7 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
                     userId, type, exception.getClass().getSimpleName(), exception);
             throw exception;
         }
-        meterRegistry.counter("ai_generation_tasks_total", "outcome", "created").increment();
+        taskCounter(type, "created").increment();
         enqueueSafely(task.getId());
         return toVO(task);
     }
@@ -190,10 +191,13 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
         if (!rateLimiter.tryAcquire(userId)) {
             throw new BusinessException(ErrorCode.TOO_MANY_REQUEST, "AI 出题请求过于频繁");
         }
-        if (taskMapper.resetForRetry(taskId, userId) <= 0) {
+        boolean incompatiblePrompt = !Objects.equals(promptVersion, task.getPromptVersion());
+        if (taskMapper.resetForRetry(taskId, userId, promptVersion, incompatiblePrompt ? 1 : 0) <= 0) {
             rateLimiter.refund(userId);
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "任务状态已变化");
         }
+        meterRegistry.counter("ai_authoring_manual_retries_total",
+                "type", task.getMode(), "checkpoint", incompatiblePrompt ? "discarded" : "preserved").increment();
         log.info("[AI_GENERATION] task reset for retry taskId={} userId={}", taskId, userId);
         enqueueSafely(taskId);
         return toVO(taskMapper.selectById(taskId));
@@ -240,16 +244,28 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
         Future<AuthoringArtifact> future = null;
         AuthoringTaskType taskType = AuthoringTaskType.parse(task.getMode());
         long taskTimeoutMs = timeoutMs(taskType);
+        if (!Objects.equals(promptVersion, task.getPromptVersion())) {
+            if (taskMapper.replacePromptVersionAndClearCheckpoint(taskId, promptVersion) <= 0) {
+                log.warn("[AI_GENERATION] execution skipped because prompt upgrade lost task ownership taskId={}",
+                        taskId);
+                return;
+            }
+            task.setPromptVersion(promptVersion);
+            task.setWorkflowStateJson(null);
+            meterRegistry.counter("ai_authoring_checkpoints_total",
+                    "type", taskType.name(), "operation", "discard_prompt_upgrade").increment();
+        }
         log.info("[AI_GENERATION] execution started taskId={} type={} attempt={} timeoutMs={}",
                 taskId, taskType, task.getAttemptCount(), taskTimeoutMs);
         try {
             AuthoringRequest request = readRequest(taskType, task.getRequestJson());
-            WorkflowContext workflowContext = new WorkflowContext(taskId, task.getPromptVersion(),
+            WorkflowContext workflowContext = new WorkflowContext(taskId, taskType, task.getPromptVersion(),
                     taskTimeoutMs, objectMapper, stage -> {
                 int updated = taskMapper.updateStage(taskId, stage.name(), stage.getProgress());
                 log.info("[AI_GENERATION] stage updated taskId={} stage={} progress={} databaseUpdated={}",
                         taskId, stage.name(), stage.getProgress(), updated > 0);
-            }, WorkflowCheckpointStore.noop(), () -> cancellationRequested(taskId), meterRegistry);
+            }, new DatabaseWorkflowCheckpointStore(taskId, taskType, taskMapper, objectMapper, meterRegistry),
+                    () -> cancellationRequested(taskId), meterRegistry);
             future = executor.submit(() -> workflowRegistry.execute(taskType, workflowContext, request));
             log.info("[AI_GENERATION] worker submitted taskId={}", taskId);
             AuthoringArtifact artifact = future.get(taskTimeoutMs, TimeUnit.MILLISECONDS);
@@ -259,15 +275,17 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
             if (current != null && Integer.valueOf(1).equals(current.getCancelRequested())) {
                 taskMapper.markTerminal(taskId, GenerationStatus.CANCELLED.getValue(),
                         null, null, latency);
+                taskCounter(taskType, "cancelled").increment();
                 log.info("[AI_GENERATION] task cancelled after worker returned taskId={} latencyMs={}",
                         taskId, latency);
                 return;
             }
             int updated = taskMapper.markReviewRequired(taskId,
-                    writeJson(AuthoringTaskResult.of(taskType, artifact)), null, latency);
+                    writeJson(AuthoringTaskResult.of(taskType, artifact)), latency);
             if (updated > 0) {
-                meterRegistry.counter("ai_generation_tasks_total", "outcome", "review_required").increment();
-                meterRegistry.timer("ai_generation_duration").record(latency, TimeUnit.MILLISECONDS);
+                taskCounter(taskType, "review_required").increment();
+                meterRegistry.timer("ai_generation_duration", "type", taskType.name())
+                        .record(latency, TimeUnit.MILLISECONDS);
                 log.info("[AI_GENERATION] task ready for review taskId={} status=REVIEW_REQUIRED latencyMs={}",
                         taskId, latency);
             } else {
@@ -285,10 +303,12 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
             AiProblemGenerationTask current = taskMapper.selectById(taskId);
             if (current != null && Integer.valueOf(1).equals(current.getCancelRequested())) {
                 taskMapper.markTerminal(taskId, GenerationStatus.CANCELLED.getValue(), null, null, latency);
+                taskCounter(taskType, "cancelled").increment();
                 log.info("[AI_GENERATION] timed-out task marked cancelled taskId={}", taskId);
             } else {
                 taskMapper.markTerminal(taskId, GenerationStatus.TIMED_OUT.getValue(),
                         "TASK_TIMEOUT", "AI 出题任务执行超时", latency);
+                taskCounter(taskType, "timed_out").increment();
                 log.error("[AI_GENERATION] task marked timed out taskId={} errorCode=TASK_TIMEOUT",
                         taskId);
             }
@@ -312,6 +332,7 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
         }
         if (Integer.valueOf(1).equals(current.getCancelRequested())) {
             taskMapper.markTerminal(current.getId(), GenerationStatus.CANCELLED.getValue(), null, null, latency);
+            taskCounter(AuthoringTaskType.parse(current.getMode()), "cancelled").increment();
             log.info("[AI_GENERATION] failed worker marked cancelled taskId={} latencyMs={}",
                     current.getId(), latency);
             return;
@@ -321,7 +342,8 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
         int attempts = current.getAttemptCount() == null ? 0 : current.getAttemptCount();
         if (isRetryable(throwable) && attempts < maxAttempts
                 && taskMapper.markRetry(current.getId(), errorCode, message) > 0) {
-            meterRegistry.counter("ai_generation_retries_total", "reason", errorCode).increment();
+            meterRegistry.counter("ai_generation_retries_total",
+                    "type", current.getMode(), "reason", errorCode).increment();
             log.warn("[AI_GENERATION] task scheduled for retry taskId={} attempt={} maxAttempts={} errorCode={} errorType={} latencyMs={}",
                     current.getId(), attempts, maxAttempts, errorCode,
                     throwable.getClass().getSimpleName(), latency, throwable);
@@ -330,7 +352,7 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
         }
         taskMapper.markTerminal(current.getId(), GenerationStatus.FAILED.getValue(),
                 errorCode, message, latency);
-        meterRegistry.counter("ai_generation_tasks_total", "outcome", "failed").increment();
+        taskCounter(AuthoringTaskType.parse(current.getMode()), "failed").increment();
         log.error("[AI_GENERATION] task marked failed taskId={} attempt={} errorCode={} errorType={} latencyMs={}",
                 current.getId(), attempts, errorCode, throwable.getClass().getSimpleName(), latency, throwable);
     }
@@ -411,14 +433,6 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
             return objectMapper.writeValueAsString(value);
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("生成任务数据无法序列化", exception);
-        }
-    }
-
-    private <T> T readJson(String value, Class<T> type) {
-        try {
-            return objectMapper.readValue(value, type);
-        } catch (JsonProcessingException exception) {
-            throw new IllegalStateException("生成任务数据无法解析", exception);
         }
     }
 
@@ -513,5 +527,10 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
 
     private long elapsedMillis(long started) {
         return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+    }
+
+    private io.micrometer.core.instrument.Counter taskCounter(AuthoringTaskType type, String outcome) {
+        return meterRegistry.counter("ai_generation_tasks_total",
+                "type", type.name(), "outcome", outcome);
     }
 }

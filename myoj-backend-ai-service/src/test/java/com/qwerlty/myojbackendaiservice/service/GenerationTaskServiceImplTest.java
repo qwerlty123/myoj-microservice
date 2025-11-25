@@ -34,7 +34,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.doReturn;
@@ -120,11 +119,11 @@ class GenerationTaskServiceImplTest {
         when(registry.execute(eq(AuthoringTaskType.PROBLEM_DRAFT), any(), any())).thenReturn(
                 new ProblemDraftArtifact(new GeneratedProblemDraft(),
                         new GenerationValidationReport(), java.util.List.of(), false));
-        when(mapper.markReviewRequired(anyLong(), anyString(), isNull(), anyLong())).thenReturn(1);
+        when(mapper.markReviewRequired(anyLong(), anyString(), anyLong())).thenReturn(1);
 
         service.execute(103L);
 
-        verify(mapper).markReviewRequired(anyLong(), anyString(), isNull(), anyLong());
+        verify(mapper).markReviewRequired(anyLong(), anyString(), anyLong());
         verify(mapper, never()).markTerminal(anyLong(),
                 org.mockito.ArgumentMatchers.eq(GenerationStatus.FAILED.getValue()),
                 any(), any(), anyLong());
@@ -177,6 +176,52 @@ class GenerationTaskServiceImplTest {
         verify(mapper).markTerminal(eq(106L), eq(GenerationStatus.FAILED.getValue()),
                 eq("SANDBOX_MISCONFIGURED"), eq("代码沙箱运行环境配置错误"), anyLong());
         verify(stream, never()).enqueue(106L);
+    }
+
+    @Test
+    void manualRetryPreservesCompatibleCheckpoint() {
+        AiProblemGenerationTask failed = task(107L, 7L, GenerationStatus.FAILED);
+        when(mapper.selectById(107L)).thenReturn(failed);
+        when(limiter.tryAcquire(7L)).thenReturn(true);
+        when(mapper.resetForRetry(107L, 7L, "generation-v1", 0)).thenReturn(1);
+
+        service.retry(107L, 7L);
+
+        verify(mapper).resetForRetry(107L, 7L, "generation-v1", 0);
+        verify(stream).enqueue(107L);
+    }
+
+    @Test
+    void manualRetryDiscardsCheckpointWhenPromptVersionChanged() {
+        AiProblemGenerationTask failed = task(108L, 7L, GenerationStatus.FAILED);
+        failed.setPromptVersion("generation-v0");
+        when(mapper.selectById(108L)).thenReturn(failed);
+        when(limiter.tryAcquire(7L)).thenReturn(true);
+        when(mapper.resetForRetry(108L, 7L, "generation-v1", 1)).thenReturn(1);
+
+        service.retry(108L, 7L);
+
+        verify(mapper).resetForRetry(108L, 7L, "generation-v1", 1);
+        verify(stream).enqueue(108L);
+    }
+
+    @Test
+    void recoveredTaskDiscardsCheckpointWhenDeployedPromptChanged() throws Exception {
+        AiProblemGenerationTask running = task(109L, 7L, GenerationStatus.RUNNING);
+        running.setPromptVersion("generation-v0");
+        running.setWorkflowStateJson("{\"schemaVersion\":1}");
+        running.setRequestJson(objectMapper.writeValueAsString(request()));
+        when(mapper.selectById(109L)).thenReturn(running);
+        when(mapper.replacePromptVersionAndClearCheckpoint(109L, "generation-v1")).thenReturn(1);
+        when(registry.execute(eq(AuthoringTaskType.PROBLEM_DRAFT), any(), any())).thenReturn(
+                new ProblemDraftArtifact(new GeneratedProblemDraft(),
+                        new GenerationValidationReport(), java.util.List.of(), false));
+        when(mapper.markReviewRequired(anyLong(), anyString(), anyLong())).thenReturn(1);
+
+        service.execute(109L);
+
+        verify(mapper).replacePromptVersionAndClearCheckpoint(109L, "generation-v1");
+        verify(mapper).markReviewRequired(eq(109L), anyString(), anyLong());
     }
 
     private ProblemDraftTaskRequest request() {

@@ -84,7 +84,12 @@ public class TestCaseAgentTools {
         context.recordToolCall(new ToolCallTrace(state.getRounds(), "evaluateCandidateCases",
                 candidates.size(), acceptedThisRound, rejections.size(), latency,
                 state.getAcceptedCases().size() >= targetCount ? "TARGET_REACHED" : "CONTINUE"));
-        context.meterRegistry().counter("ai_authoring_tool_calls_total", "tool", "evaluateCandidateCases").increment();
+        context.meterRegistry().counter("ai_authoring_tool_calls_total",
+                "type", context.taskType().name(),
+                "tool", "evaluateCandidateCases",
+                "round", Integer.toString(state.getRounds()),
+                "accepted", Integer.toString(acceptedThisRound),
+                "rejected", Integer.toString(rejections.size())).increment();
         context.checkpoint(GenerationStage.AGENT_GENERATING_CASES, state);
         return new CandidateEvaluationResult(state.getRounds(), candidates.size(), acceptedThisRound,
                 rejections.size(), state.getAcceptedCases().size(),

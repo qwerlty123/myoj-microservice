@@ -21,6 +21,7 @@ public class AiProblemGenerationTask {
     private String requestJson;
     private String resultJson;
     private String validationJson;
+    private String workflowStateJson;
     private String modelName;
     private String promptVersion;
     private Integer inputTokens;

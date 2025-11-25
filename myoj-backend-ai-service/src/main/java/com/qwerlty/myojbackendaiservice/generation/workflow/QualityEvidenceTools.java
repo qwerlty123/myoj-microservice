@@ -36,7 +36,12 @@ public class QualityEvidenceTools {
             context.recordToolCall(new ToolCallTrace(calls, "inspectCaseEvidence",
                     caseIndexes.size(), result.size(), Math.max(0, caseIndexes.size() - result.size()),
                     latency, "EVIDENCE_RETURNED"));
-            context.meterRegistry().counter("ai_authoring_tool_calls_total", "tool", "inspectCaseEvidence").increment();
+            context.meterRegistry().counter("ai_authoring_tool_calls_total",
+                    "type", context.taskType().name(),
+                    "tool", "inspectCaseEvidence",
+                    "round", Integer.toString(calls),
+                    "accepted", Integer.toString(result.size()),
+                    "rejected", Integer.toString(Math.max(0, caseIndexes.size() - result.size()))).increment();
         }
         return result;
     }

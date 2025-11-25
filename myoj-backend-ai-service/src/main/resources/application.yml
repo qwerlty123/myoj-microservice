@@ -108,12 +108,14 @@ myoj:
     rate-limit:
       per-user-per-hour: 10
     generation:
-      prompt-version: ${AI_GENERATION_PROMPT_VERSION:v1}
+      prompt-version: ${AI_GENERATION_PROMPT_VERSION:v2}
       concurrency: ${AI_GENERATION_CONCURRENCY:2}
-      # 完整出题包含多次结构化模型调用和多语言沙箱验证，5 分钟不足以覆盖慢响应。
-      task-timeout-ms: ${AI_GENERATION_TASK_TIMEOUT_MS:900000}
-      # 必须晚于任务自身超时，避免恢复任务把仍在正常执行的消息重复消费。
-      running-timeout-ms: ${AI_GENERATION_RUNNING_TIMEOUT_MS:1200000}
+      workflow:
+        problem-draft-timeout-ms: ${AI_PROBLEM_DRAFT_TIMEOUT_MS:720000}
+        test-cases-timeout-ms: ${AI_TEST_CASES_TIMEOUT_MS:1080000}
+        quality-review-timeout-ms: ${AI_QUALITY_REVIEW_TIMEOUT_MS:900000}
+      # 比最长的用例生成预算多 5 分钟，避免恢复任务重复消费仍在执行的消息。
+      running-timeout-ms: ${AI_GENERATION_RUNNING_TIMEOUT_MS:1380000}
       max-attempts: ${AI_GENERATION_MAX_ATTEMPTS:3}
       recovery-interval-ms: 15000
       rate-limit:

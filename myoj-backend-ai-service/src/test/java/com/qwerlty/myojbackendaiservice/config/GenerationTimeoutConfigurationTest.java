@@ -20,13 +20,20 @@ class GenerationTimeoutConfigurationTest {
                 .load("applicationConfig", new ClassPathResource("application.yml"));
         yamlSources.forEach(environment.getPropertySources()::addLast);
 
-        long taskTimeoutMs = environment.getRequiredProperty(
-                "myoj.ai.generation.task-timeout-ms", Long.class);
+        long draftTimeoutMs = environment.getRequiredProperty(
+                "myoj.ai.generation.workflow.problem-draft-timeout-ms", Long.class);
+        long casesTimeoutMs = environment.getRequiredProperty(
+                "myoj.ai.generation.workflow.test-cases-timeout-ms", Long.class);
+        long qualityTimeoutMs = environment.getRequiredProperty(
+                "myoj.ai.generation.workflow.quality-review-timeout-ms", Long.class);
         long runningTimeoutMs = environment.getRequiredProperty(
                 "myoj.ai.generation.running-timeout-ms", Long.class);
 
-        assertThat(taskTimeoutMs).isGreaterThanOrEqualTo(Duration.ofMinutes(15).toMillis());
-        assertThat(runningTimeoutMs - taskTimeoutMs)
+        assertThat(draftTimeoutMs).isEqualTo(Duration.ofMinutes(12).toMillis());
+        assertThat(casesTimeoutMs).isEqualTo(Duration.ofMinutes(18).toMillis());
+        assertThat(qualityTimeoutMs).isEqualTo(Duration.ofMinutes(15).toMillis());
+        assertThat(runningTimeoutMs).isEqualTo(Duration.ofMinutes(23).toMillis());
+        assertThat(runningTimeoutMs - casesTimeoutMs)
                 .isGreaterThanOrEqualTo(Duration.ofMinutes(2).toMillis());
     }
 }

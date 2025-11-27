@@ -91,7 +91,7 @@ public class SandboxBatchVerifier {
             String oracleOutput = oracleOutputs.get(position);
             boolean oracleMatch = oracleOutput == null || canonical.equals(oracleOutput);
             if (!languagesMatch) {
-                rejected.add(new CandidateRejection(digest(candidate.getInput()), "Java/C++/Go 校验解输出不一致"));
+                rejected.add(new CandidateRejection(digest(candidate.getInput()), "多语言校验解输出不一致"));
                 continue;
             }
             if (!oracleMatch) {

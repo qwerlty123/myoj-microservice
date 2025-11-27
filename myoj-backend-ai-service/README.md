@@ -1,6 +1,8 @@
 # MyOJ AI Service
 
-独立的 Spring Boot 3 / Spring AI 微服务，包含提交复盘和管理员自动出题两条隔离的业务链路。现有提交复盘行为保持不变；自动出题不使用 RAG，也不调用 Question Service 等业务微服务，只访问代码沙箱做离线验证。
+独立的 Spring Boot 3 / Spring AI 微服务，包含提交复盘和管理员题目创作两组隔离链路。提交复盘保持原有 RAG 与 Submission Tools；题目创作拆成创建题目、生成用例、AI 质检三个工作流，不使用 RAG，不直接写入 Question Service。
+
+完整工作流与 Tool Calling 时序见 [Spring AI 题目创作工作流](../docs/ai-authoring-workflows.md)。
 
 ## Architecture
 
@@ -23,31 +25,36 @@ flowchart LR
 
 工具调用循环由 Spring AI `ToolCallAdvisor` 负责，服务不自研 ReAct。`userId`、`submissionId` 和当前提交通过 `ToolContext` 提供给工具，不作为工具参数交给模型。
 
-## Problem generation architecture
+## Authoring architecture
 
 ```mermaid
 flowchart LR
-    A["管理员编辑器"] --> G["Gateway"]
+    UI["管理员编辑器"] --> G["Gateway"]
     G --> C["GenerationTaskController"]
     C --> DB[("ai_problem_generation_task")]
     C --> RS["Redis Stream"]
     RS --> W["Generation Worker"]
-    W --> M["独立 Spring AI ChatClient（无 RAG / 无 Tool）"]
+    W --> R["AuthoringWorkflowRegistry"]
+    R --> D["ProblemDraftWorkflow"]
+    R --> T["TestCaseGenerationWorkflow"]
+    R --> QUALITY["QuestionQualityWorkflow"]
+    D --> M["结构化 ChatClient（无 Advisor）"]
+    T --> AGENT["Agent ChatClient（仅 ToolCallAdvisor）"]
+    QUALITY --> AGENT
     W --> S["HMAC 签名代码沙箱"]
     S --> J["Java 17 容器"]
     S --> P["C++17 容器"]
     S --> O["Go 1.22 容器"]
     W --> DB
-    DB --> A
-    A -->|"人工审核并应用"| Q["既有 Question API"]
+    DB --> UI
+    UI -->|"人工审核并应用"| QUESTION["既有 Question API"]
 ```
 
-生成链路先产生题面规格、Java/C++/Go 三份独立参考实现、Java 输入校验器、Java 小数据暴力解和分类测试输入，再在沙箱中完成以下质量门禁：
+三条工作流共享异步任务设施，但不互相调用：
 
-- 每份程序都实际编译运行；输入校验器必须接受全部输入。
-- 三种参考实现对所有用例逐字输出一致。
-- 至少三组小数据必须与暴力解输出一致。
-- 输入去重并限制单例、总量、源码、答案和输出大小。
+- 创建题目只生成并验证 2–3 个基础样例；Java/C++/Go 与小数据 Oracle 必须一致。
+- 生成用例由 Spring AI `ToolCallAdvisor` 驱动真实工具循环，最多 8 轮；结束后再执行 Java 最终门禁。
+- AI 质检先执行确定性检查，再按需进行语义审查和最多 3 次工具取证；Java 固定计分并生成候选补丁。
 - 成功状态是 `REVIEW_REQUIRED`，AI 永远不直接发布题目。管理员应用草稿后仍走 Question Service 原有新增或更新接口，因此不引入跨服务事务。
 
 数据库记录是任务状态的事实来源。请求先写入 `PENDING` 记录再写 Redis Stream；Redis 暂时不可用时恢复任务会补投。消费使用 CAS 领取、实例中断回收、有限重试和执行超时，Stream 消息只携带 `taskId`。
@@ -71,34 +78,37 @@ GET /api/ai/feedback/history?current=1&pageSize=10&submissionId=123456
 
 历史接口中的 `submissionId` 可省略；省略时返回当前用户跨提交的全部复盘。任务状态为：`PENDING`、`RUNNING`、`SUCCESS`、`FAILED`、`TIMEOUT`。响应保持 `{code,data,message}` 格式。
 
-自动出题接口仅允许 Gateway 注入的 `X-user-Role: admin` 身份访问：
+题目创作接口仅允许 Gateway 注入的 `X-user-Role: admin` 身份访问。三个工作流使用独立创建接口：
 
 ```http
-POST /api/ai/generation/tasks
+POST /api/ai/generation/tasks/problem-drafts
 X-Idempotency-Key: 01927b8e-21a4-7a3b-9d3b-efc683014c50
 Content-Type: application/json
 
 {
-  "mode": "FULL_PROBLEM",
   "requirements": {
     "topic": "滑动窗口与重复值",
     "difficulty": 1,
-    "tags": ["数组", "双指针"],
-    "caseCount": 20
+    "tags": ["数组", "双指针"]
   }
 }
 ```
 
-`mode` 也可以是 `TEST_CASES`，此时必须传递当前编辑器的 `sourceDraft`，服务不会读取 Question Service。任务查询与控制接口：
+```http
+POST /api/ai/generation/tasks/test-cases
+POST /api/ai/generation/tasks/quality-reviews
+```
+
+后两个接口必须携带点击时的编辑器 `sourceDraft`；服务不会读取 Question Service。任务查询与控制接口：
 
 ```http
 GET  /api/ai/generation/tasks/{taskId}
-GET  /api/ai/generation/tasks?current=1&pageSize=10
+GET  /api/ai/generation/tasks?current=1&pageSize=10&type=QUALITY_REVIEW
 POST /api/ai/generation/tasks/{taskId}/retry
 POST /api/ai/generation/tasks/{taskId}/cancel
 ```
 
-生成任务状态为 `PENDING`、`RUNNING`、`REVIEW_REQUIRED`、`FAILED`、`TIMED_OUT`、`CANCELLED`。`taskId` 按字符串序列化，避免浏览器丢失 Snowflake 精度。
+生成任务状态为 `PENDING`、`RUNNING`、`REVIEW_REQUIRED`、`FAILED`、`TIMED_OUT`、`CANCELLED`。结果统一包装为 `{type,schemaVersion,data}` 判别联合；`taskId` 按字符串序列化，避免浏览器丢失 Snowflake 精度。
 
 ## Required configuration
 
@@ -118,10 +128,12 @@ AI_KNOWLEDGE_EMBEDDING_BATCH_SIZE=10
 # 自动出题（与代码沙箱配置相同的 HMAC 密钥）
 CODESANDBOX_URL=http://codesandbox.internal:8090/executeCode
 CODESANDBOX_SECRET_KEY=replace-with-a-long-random-secret
-AI_GENERATION_PROMPT_VERSION=v1
+AI_GENERATION_PROMPT_VERSION=v2
 AI_GENERATION_CONCURRENCY=2
-AI_GENERATION_TASK_TIMEOUT_MS=900000
-AI_GENERATION_RUNNING_TIMEOUT_MS=1200000
+AI_PROBLEM_DRAFT_TIMEOUT_MS=720000
+AI_TEST_CASES_TIMEOUT_MS=1080000
+AI_QUALITY_REVIEW_TIMEOUT_MS=900000
+AI_GENERATION_RUNNING_TIMEOUT_MS=1380000
 AI_GENERATION_MAX_ATTEMPTS=3
 AI_GENERATION_USER_HOURLY_LIMIT=10
 AI_GENERATION_GLOBAL_HOURLY_LIMIT=30
@@ -179,6 +191,14 @@ mysql -h 127.0.0.1 -u root -p < sql/migration_20260813_ai_problem_generation.sql
 
 迁移会创建生成任务表，并把 `question.answer`、`question.judgeCase` 扩展为 `MEDIUMTEXT`。应用发布顺序为：数据库迁移 → 代码沙箱 → AI Service → Gateway → 前端。回滚应用版本时保留新增表和扩展后的字段，不需要反向收窄字段。
 
+从旧的双模式生成链路升级到三工作流时，再执行：
+
+```bash
+mysql -h 127.0.0.1 -u root -p < sql/migration_20260814_ai_authoring_workflows.sql
+```
+
+迁移会增加 `workflowStateJson`，把 `FULL_PROBLEM` 改为 `PROBLEM_DRAFT`，并将旧结果包装为新版结果信封。旧 `validationJson` 列保留兼容，新任务不再写入。
+
 ## Run and test
 
 ```bash
@@ -195,7 +215,7 @@ GET /api/ai/actuator/health
 GET /api/ai/actuator/prometheus
 ```
 
-关键自定义指标覆盖 Redis Stream 入队/消费、生成任务创建/审核/失败、执行耗时和重试原因，以及原复盘链路的模型、Token、RAG 和工具指标。Spring AI observation 的内容采集保持关闭，日志不得打印代码、Prompt、工具结果、模型原文或 API Key。
+关键自定义指标覆盖 Redis Stream 入队/消费、工作流类型与阶段、工具名与轮次、通过/拒绝数量、断点恢复、生成任务结果、执行耗时和重试原因，以及原复盘链路的模型、Token、RAG 和工具指标。Spring AI observation 的内容采集保持关闭，日志不得打印代码、Prompt、工具结果、模型原文或 API Key。
 
 ## Security boundary
 
@@ -204,7 +224,7 @@ GET /api/ai/actuator/prometheus
 - 两个工具均为只读；模型不能指定任意用户或提交，也不能调用代码沙箱。
 - 模型输出的行号会按当前代码范围过滤，引用会被实际 RAG 召回文档覆盖，伪造引用不会落库。
 - 任务表是业务记录表，只保存任务状态和用户自己的历史复盘，不承担消息扫描或补投；Redis Stream 消息只包含 `taskId`。
-- 自动出题使用不带 Advisor 的独立 `ChatClient`，不访问向量库，也不暴露任何业务工具。
+- 题目创作的结构化 Client 不带 Advisor；Agent Client 只带 `ToolCallAdvisor`。两者都不配置 RAG，不访问向量库。
 - 自动出题只接受管理员身份，任务按 `userId` 隔离，创建请求强制 UUID 幂等键并执行用户级和全局限流。
 - 模型产生的源码和输入一律视为不可信内容，只有通过无网络、只读根文件系统、资源限额容器验证后才进入待审核草稿。
 - 待审核草稿不自动调用 Question Service，不自动发布；发布动作仍由管理员在原编辑器明确确认。

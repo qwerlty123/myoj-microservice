@@ -8,6 +8,7 @@ import com.qwerlty.myojbackendaiservice.model.dto.generation.ProblemDraftRequire
 import com.qwerlty.myojbackendaiservice.model.dto.generation.ReferenceSolution;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.ValidationPrograms;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
@@ -25,7 +26,7 @@ public class SpringAiProblemGenerationModel implements ProblemGenerationModel {
     private final ObjectMapper objectMapper;
 
     public SpringAiProblemGenerationModel(
-            @Qualifier("problemGenerationChatClient") ChatClient chatClient,
+            @Qualifier("authoringStructuredChatClient") ChatClient chatClient,
             ObjectMapper objectMapper) {
         this.chatClient = chatClient;
         this.objectMapper = objectMapper;
@@ -41,7 +42,8 @@ public class SpringAiProblemGenerationModel implements ProblemGenerationModel {
                 solutionExplanation 给出正确算法、正确性说明和复杂度，不包含完整代码。
                 <requirements>%s</requirements>
                 """.formatted(json(requirements));
-        return required(chatClient.prompt().system(SYSTEM).user(prompt).call()
+        return required(chatClient.prompt().system(SYSTEM).user(prompt)
+                .options(OpenAiChatOptions.builder().temperature(0.45).build()).call()
                 .entity(GeneratedProblemSpec.class), "题目草稿规格");
     }
 

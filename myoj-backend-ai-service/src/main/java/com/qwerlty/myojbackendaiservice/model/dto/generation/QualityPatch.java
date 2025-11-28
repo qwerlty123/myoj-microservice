@@ -12,6 +12,8 @@ public class QualityPatch {
     private Object beforeValue;
     private Object afterValue;
     private String beforeHash;
+    private String caseInputHash;
+    private String caseOutputHash;
     private String reason;
     private List<String> evidenceRefs = new ArrayList<>();
 }

@@ -137,8 +137,8 @@ public class QuestionQualityWorkflow implements AuthoringWorkflow<QualityReviewT
             if (!seen.add(key)) {
                 String issueId = "duplicate-case-" + index;
                 issues.add(issue(issueId, "TEST_CASES", "MINOR", "存在重复测试用例", "用例 " + (index + 1) + " 与之前用例完全重复"));
-                patches.add(patch("REMOVE_DUPLICATE_CASE", "/judgeCase/" + index,
-                        judgeCase, null, "删除完全重复的测试用例", List.of(issueId)));
+                patches.add(casePatch("REMOVE_DUPLICATE_CASE", "/judgeCase/" + index,
+                        judgeCase, null, judgeCase, "删除完全重复的测试用例", List.of(issueId)));
             }
         }
         return patches;
@@ -170,8 +170,9 @@ public class QuestionQualityWorkflow implements AuthoringWorkflow<QualityReviewT
                 issues.add(issue(issueId, "TEST_CASES", "BLOCKER", "预期输出与独立解不一致",
                         "用例 " + (index + 1) + " 的 Java、C++ 与 Oracle 均输出 " + verified.output()));
                 if (tripleAgreement) {
-                    patches.add(patch("UPDATE_CASE_OUTPUT", "/judgeCase/" + index + "/output",
-                            judgeCase.getOutput(), verified.output(), "三方独立执行结果一致", List.of(issueId)));
+                    patches.add(casePatch("UPDATE_CASE_OUTPUT", "/judgeCase/" + index + "/output",
+                            judgeCase.getOutput(), verified.output(), judgeCase,
+                            "三方独立执行结果一致", List.of(issueId)));
                 }
             }
         }
@@ -303,6 +304,14 @@ public class QuestionQualityWorkflow implements AuthoringWorkflow<QualityReviewT
         patch.setBeforeHash(DraftFingerprint.value(before, objectMapper));
         patch.setReason(blank(reason) ? "AI 质检修改建议" : reason);
         patch.setEvidenceRefs(evidenceRefs);
+        return patch;
+    }
+
+    private QualityPatch casePatch(String operation, String target, Object before, Object after,
+                                   GeneratedJudgeCase judgeCase, String reason, List<String> evidenceRefs) {
+        QualityPatch patch = patch(operation, target, before, after, reason, evidenceRefs);
+        patch.setCaseInputHash(DraftFingerprint.value(normalize(judgeCase.getInput()), objectMapper));
+        patch.setCaseOutputHash(DraftFingerprint.value(normalize(judgeCase.getOutput()), objectMapper));
         return patch;
     }
 

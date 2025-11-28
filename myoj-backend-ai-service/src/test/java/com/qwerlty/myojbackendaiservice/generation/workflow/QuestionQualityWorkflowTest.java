@@ -100,6 +100,8 @@ class QuestionQualityWorkflowTest {
             assertThat(patch.getTarget()).isEqualTo("/judgeCase/0/output");
             assertThat(patch.getAfterValue()).isEqualTo("correct:1");
             assertThat(patch.getBeforeHash()).hasSize(64);
+            assertThat(patch.getCaseInputHash()).hasSize(64);
+            assertThat(patch.getCaseOutputHash()).hasSize(64);
         });
         assertThat(artifact.getToolTrace()).hasSize(1);
     }

@@ -197,7 +197,7 @@ mysql -h 127.0.0.1 -u root -p < sql/migration_20260813_ai_problem_generation.sql
 mysql -h 127.0.0.1 -u root -p < sql/migration_20260814_ai_authoring_workflows.sql
 ```
 
-迁移会增加 `workflowStateJson`，把 `FULL_PROBLEM` 改为 `PROBLEM_DRAFT`，并将旧结果包装为新版结果信封。旧 `validationJson` 列保留兼容，新任务不再写入。
+迁移会增加 `workflowStateJson`，把 `FULL_PROBLEM` 改为 `PROBLEM_DRAFT`，并将旧结果包装为新版结果信封。旧 `validationJson` 列保留兼容，新任务不再写入。该增量脚本可重复执行，已完成升级的环境会跳过重复加列。
 
 ## Run and test
 

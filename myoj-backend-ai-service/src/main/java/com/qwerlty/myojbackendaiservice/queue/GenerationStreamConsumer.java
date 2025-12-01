@@ -12,6 +12,7 @@ import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.ReadOffset;
 import org.springframework.data.redis.connection.stream.StreamOffset;
 import org.springframework.data.redis.stream.StreamMessageListenerContainer;
+import org.springframework.data.redis.stream.StreamMessageListenerContainer.StreamReadRequest;
 import org.springframework.stereotype.Component;
 
 @Slf4j
@@ -49,10 +50,13 @@ public class GenerationStreamConsumer {
                 streamManager.getStreamKey(), streamManager.getGroup(), consumerPrefix, concurrency);
         streamManager.ensureGroup();
         for (int index = 0; index < concurrency; index++) {
-            container.receive(
-                    Consumer.from(streamManager.getGroup(), consumerPrefix + "-" + index),
-                    StreamOffset.create(streamManager.getStreamKey(), ReadOffset.lastConsumed()),
-                    this::consume);
+            StreamReadRequest<String> request = StreamReadRequest
+                    .builder(StreamOffset.create(streamManager.getStreamKey(), ReadOffset.lastConsumed()))
+                    .consumer(Consumer.from(streamManager.getGroup(), consumerPrefix + "-" + index))
+                    .autoAcknowledge(false)
+                    .cancelOnError(throwable -> false)
+                    .build();
+            container.register(request, this::consume);
         }
         container.start();
         log.info("[AI_GENERATION] stream consumers started stream={} group={}",

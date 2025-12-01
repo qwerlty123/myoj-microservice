@@ -7,9 +7,12 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.stream.StreamMessageListenerContainer;
+import org.springframework.data.redis.stream.StreamMessageListenerContainer.StreamReadRequest;
 
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -20,16 +23,18 @@ import static org.mockito.Mockito.when;
 class GenerationStreamConsumerTest {
 
     @Test
-    void startsOneListenerPerConfiguredWorker() {
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void keepsEveryListenerActiveAfterTransientRedisPollingErrors() {
         Fixture fixture = fixture();
 
         fixture.consumer.subscribe();
 
         verify(fixture.stream).ensureGroup();
-        verify(fixture.container, times(2)).receive(
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any());
+        var requestCaptor = org.mockito.ArgumentCaptor.forClass(StreamReadRequest.class);
+        verify(fixture.container, times(2)).register(requestCaptor.capture(), any());
+        assertThat(requestCaptor.getAllValues()).allSatisfy(request ->
+                assertThat(request.getCancelSubscriptionOnError()
+                        .test(new IllegalStateException("redis timeout"))).isFalse());
         verify(fixture.container).start();
     }
 

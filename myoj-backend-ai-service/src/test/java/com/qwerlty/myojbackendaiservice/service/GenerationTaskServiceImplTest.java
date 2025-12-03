@@ -1,6 +1,7 @@
 package com.qwerlty.myojbackendaiservice.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.io.JsonEOFException;
 import com.qwerlty.myojbackendaiservice.exception.BusinessException;
 import com.qwerlty.myojbackendaiservice.generation.workflow.AuthoringWorkflowRegistry;
 import com.qwerlty.myojbackendaiservice.generation.GenerationValidationException;
@@ -22,6 +23,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.retry.TransientAiException;
+import org.springframework.ai.tool.definition.ToolDefinition;
+import org.springframework.ai.tool.execution.ToolExecutionException;
 
 import java.util.Date;
 import java.util.UUID;
@@ -159,6 +162,28 @@ class GenerationTaskServiceImplTest {
 
         verify(mapper).markRetry(105L, "QUALITY_GATE_FAILED", "三语言输出不一致");
         verify(stream).enqueue(105L);
+    }
+
+    @Test
+    void truncatedToolArgumentsUseTheRemainingTaskAttempt() throws Exception {
+        AiProblemGenerationTask running = task(110L, 7L, GenerationStatus.RUNNING);
+        running.setAttemptCount(2);
+        running.setRequestJson(objectMapper.writeValueAsString(request()));
+        when(mapper.selectById(110L)).thenReturn(running);
+        ToolExecutionException truncatedArguments = new ToolExecutionException(
+                mock(ToolDefinition.class),
+                new JsonEOFException(null, null, "Unexpected end-of-input"));
+        when(registry.execute(eq(AuthoringTaskType.PROBLEM_DRAFT), any(), any()))
+                .thenThrow(truncatedArguments);
+        when(mapper.markRetry(110L, "MODEL_OUTPUT_INVALID", "模型工具参数不完整，已安排重试"))
+                .thenReturn(1);
+
+        service.execute(110L);
+
+        verify(mapper).markRetry(110L, "MODEL_OUTPUT_INVALID", "模型工具参数不完整，已安排重试");
+        verify(stream).enqueue(110L);
+        verify(mapper, never()).markTerminal(eq(110L), eq(GenerationStatus.FAILED.getValue()),
+                any(), any(), anyLong());
     }
 
     @Test

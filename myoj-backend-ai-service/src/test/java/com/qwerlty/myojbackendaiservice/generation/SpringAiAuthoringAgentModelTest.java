@@ -52,6 +52,8 @@ class SpringAiAuthoringAgentModelTest {
                 state.getSpecification(), state.getCoveragePlan(), 10, "边界"), tools);
 
         assertThat(chatModel.prompts).hasSize(2);
+        assertThat(chatModel.prompts.get(0).getContents())
+                .contains("大规模输入绝不能", "RANGE", "32 KiB");
         assertThat(chatModel.prompts.get(1).getInstructions())
                 .anyMatch(ToolResponseMessage.class::isInstance);
         assertThat(state.getRounds()).isEqualTo(1);
@@ -69,7 +71,7 @@ class SpringAiAuthoringAgentModelTest {
                         .content("")
                         .toolCalls(List.of(new AssistantMessage.ToolCall(
                                 "call-1", "function", "evaluateCandidateCases", """
-                                {"candidates":[{"input":"1\\n","category":"NORMAL","riskIds":[],"oracleEligible":true}]}
+                                {"candidates":[{"chunks":[{"type":"LITERAL","value":"1\\n"}],"category":"NORMAL","riskIds":[],"oracleEligible":true}]}
                                 """)))
                         .build();
                 return new ChatResponse(List.of(new Generation(toolCall)));

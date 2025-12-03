@@ -1,6 +1,7 @@
 package com.qwerlty.myojbackendaiservice.generation.workflow;
 
 import com.qwerlty.myojbackendaiservice.generation.GenerationValidationException;
+import com.qwerlty.myojbackendaiservice.model.dto.generation.CandidateInputChunk;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CandidateEvaluationResult;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CandidateRejection;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CandidateTestInput;
@@ -24,6 +25,10 @@ public class TestCaseAgentTools {
     private static final int MAX_ROUNDS = 8;
     private static final int MAX_BATCH_SIZE = 10;
     private static final int MAX_INPUT_BYTES = 1024 * 1024;
+    private static final int MAX_DIRECT_INPUT_BYTES = 8 * 1024;
+    private static final int MAX_TOOL_DESCRIPTOR_BYTES = 32 * 1024;
+    private static final int MAX_CHUNKS = 32;
+    private static final int MAX_EXPANSION_ITEMS = 1_000_000;
 
     private final WorkflowContext context;
     private final SandboxBatchVerifier verifier;
@@ -40,9 +45,11 @@ public class TestCaseAgentTools {
         this.targetCount = targetCount;
     }
 
-    @Tool(description = "提交候选测试输入并获得代码沙箱验收结果、拒绝原因、剩余数量和覆盖缺口。每次最多10项。")
+    @Tool(description = "提交候选测试输入并获得沙箱验收结果。每次最多10项，工具参数JSON总计不得超过32KiB；"
+            + "input只用于8KiB以内的小输入，大输入必须用LITERAL/REPEAT/RANGE/CYCLE chunks压缩表示，禁止展开成长字符串。")
     public CandidateEvaluationResult evaluateCandidateCases(
-            @ToolParam(description = "候选输入列表，不得包含期望输出，最多10项") List<CandidateTestInput> candidates) {
+            @ToolParam(description = "候选输入列表，不得包含期望输出，最多10项；每项的input与chunks必须二选一")
+            List<CandidateTestInput> candidates) {
         context.checkCancelled();
         if (state.getRounds() >= MAX_ROUNDS) {
             throw new GenerationValidationException("测试用例 Agent 已达到 8 轮工具调用上限");
@@ -55,9 +62,26 @@ public class TestCaseAgentTools {
         List<CandidateRejection> preliminary = new ArrayList<>();
         List<CandidateTestInput> unique = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
+        int descriptorBytes = 0;
         state.getAcceptedCases().forEach(item -> seen.add(normalizeInput(item.getCandidate().getInput())));
         for (CandidateTestInput candidate : candidates) {
-            if (candidate == null || candidate.getInput() == null || candidate.getInput().isBlank()) {
+            if (candidate == null) {
+                preliminary.add(new CandidateRejection("empty", "输入为空"));
+                continue;
+            }
+            try {
+                int candidateDescriptorBytes = descriptorBytes(candidate);
+                if (candidateDescriptorBytes > MAX_TOOL_DESCRIPTOR_BYTES - descriptorBytes) {
+                    throw new CandidateInputException("encoding", "本轮工具参数超过 32 KiB，请使用压缩 chunks");
+                }
+                descriptorBytes += candidateDescriptorBytes;
+                candidate.setInput(materializeInput(candidate));
+                candidate.setChunks(List.of());
+            } catch (CandidateInputException exception) {
+                preliminary.add(new CandidateRejection(exception.code, exception.getMessage()));
+                continue;
+            }
+            if (candidate.getInput().isBlank()) {
                 preliminary.add(new CandidateRejection("empty", "输入为空"));
                 continue;
             }
@@ -116,6 +140,154 @@ public class TestCaseAgentTools {
     private JudgeConfigValue config() {
         return state.getSpecification().getJudgeConfig() == null
                 ? new JudgeConfigValue() : state.getSpecification().getJudgeConfig();
+    }
+
+    private int descriptorBytes(CandidateTestInput candidate) {
+        long bytes = utf8Bytes(candidate.getInput()) + utf8Bytes(candidate.getCategory());
+        if (candidate.getRiskIds() != null) {
+            for (String riskId : candidate.getRiskIds()) bytes += utf8Bytes(riskId);
+        }
+        List<CandidateInputChunk> chunks = candidate.getChunks();
+        if (chunks != null) {
+            for (CandidateInputChunk chunk : chunks) {
+                if (chunk == null) continue;
+                bytes += utf8Bytes(chunk.getType()) + utf8Bytes(chunk.getValue())
+                        + utf8Bytes(chunk.getSeparator());
+                if (chunk.getValues() != null) {
+                    for (String value : chunk.getValues()) bytes += utf8Bytes(value);
+                }
+                if (bytes > MAX_TOOL_DESCRIPTOR_BYTES) return MAX_TOOL_DESCRIPTOR_BYTES + 1;
+            }
+        }
+        return (int) bytes;
+    }
+
+    private String materializeInput(CandidateTestInput candidate) {
+        boolean hasInput = candidate.getInput() != null && !candidate.getInput().isEmpty();
+        boolean hasChunks = candidate.getChunks() != null && !candidate.getChunks().isEmpty();
+        if (hasInput == hasChunks) {
+            throw new CandidateInputException("encoding", "input 与 chunks 必须二选一");
+        }
+        if (hasInput) {
+            if (utf8Bytes(candidate.getInput()) > MAX_DIRECT_INPUT_BYTES) {
+                throw new CandidateInputException("encoding", "直接 input 超过 8 KiB，请使用压缩 chunks");
+            }
+            return candidate.getInput();
+        }
+        if (candidate.getChunks().size() > MAX_CHUNKS) {
+            throw new CandidateInputException("encoding", "chunks 不能超过 32 个片段");
+        }
+
+        LimitedInputBuilder result = new LimitedInputBuilder();
+        for (CandidateInputChunk chunk : candidate.getChunks()) {
+            appendChunk(result, chunk);
+        }
+        return result.toString();
+    }
+
+    private void appendChunk(LimitedInputBuilder result, CandidateInputChunk chunk) {
+        if (chunk == null || chunk.getType() == null) {
+            throw new CandidateInputException("encoding", "chunk.type 不能为空");
+        }
+        String type = chunk.getType().trim().toUpperCase(Locale.ROOT);
+        switch (type) {
+            case "LITERAL" -> result.append(requireValue(chunk.getValue(), "LITERAL.value"));
+            case "REPEAT" -> appendRepeat(result, requireValue(chunk.getValue(), "REPEAT.value"),
+                    count(chunk), separator(chunk, ""));
+            case "RANGE" -> appendRange(result, chunk);
+            case "CYCLE" -> appendCycle(result, chunk);
+            default -> throw new CandidateInputException("encoding", "不支持的 chunk.type: " + type);
+        }
+    }
+
+    private void appendRepeat(LimitedInputBuilder result, String value, int count, String separator) {
+        for (int index = 0; index < count; index++) {
+            if (index > 0) result.append(separator);
+            result.append(value);
+        }
+    }
+
+    private void appendRange(LimitedInputBuilder result, CandidateInputChunk chunk) {
+        if (chunk.getStart() == null) {
+            throw new CandidateInputException("encoding", "RANGE.start 不能为空");
+        }
+        long step = chunk.getStep() == null ? 1L : chunk.getStep();
+        int count = count(chunk);
+        String separator = separator(chunk, " ");
+        for (int index = 0; index < count; index++) {
+            if (index > 0) result.append(separator);
+            try {
+                result.append(Long.toString(Math.addExact(chunk.getStart(), Math.multiplyExact(step, index))));
+            } catch (ArithmeticException exception) {
+                throw new CandidateInputException("encoding", "RANGE 计算结果超出 long 范围");
+            }
+        }
+    }
+
+    private void appendCycle(LimitedInputBuilder result, CandidateInputChunk chunk) {
+        List<String> values = chunk.getValues();
+        if (values == null || values.isEmpty() || values.size() > 100) {
+            throw new CandidateInputException("encoding", "CYCLE.values 必须包含 1 到 100 个短文本");
+        }
+        if (values.stream().anyMatch(value -> value == null || value.isEmpty())) {
+            throw new CandidateInputException("encoding", "CYCLE.values 不能包含空文本");
+        }
+        int count = count(chunk);
+        String separator = separator(chunk, " ");
+        for (int index = 0; index < count; index++) {
+            if (index > 0) result.append(separator);
+            result.append(values.get(index % values.size()));
+        }
+    }
+
+    private int count(CandidateInputChunk chunk) {
+        if (chunk.getCount() == null || chunk.getCount() <= 0 || chunk.getCount() > MAX_EXPANSION_ITEMS) {
+            throw new CandidateInputException("encoding", "chunk.count 必须在 1 到 1000000 之间");
+        }
+        return chunk.getCount();
+    }
+
+    private String requireValue(String value, String field) {
+        if (value == null || value.isEmpty()) {
+            throw new CandidateInputException("encoding", field + " 不能为空");
+        }
+        return value;
+    }
+
+    private String separator(CandidateInputChunk chunk, String defaultValue) {
+        return chunk.getSeparator() == null ? defaultValue : chunk.getSeparator();
+    }
+
+    private int utf8Bytes(String value) {
+        return value == null ? 0 : value.getBytes(StandardCharsets.UTF_8).length;
+    }
+
+    private static final class LimitedInputBuilder {
+        private final StringBuilder value = new StringBuilder();
+        private int bytes;
+
+        private void append(String fragment) {
+            int fragmentBytes = fragment.getBytes(StandardCharsets.UTF_8).length;
+            if (fragmentBytes > MAX_INPUT_BYTES - bytes) {
+                throw new CandidateInputException("oversize", "压缩输入展开后超过 1 MiB");
+            }
+            value.append(fragment);
+            bytes += fragmentBytes;
+        }
+
+        @Override
+        public String toString() {
+            return value.toString();
+        }
+    }
+
+    private static final class CandidateInputException extends RuntimeException {
+        private final String code;
+
+        private CandidateInputException(String code, String message) {
+            super(message);
+            this.code = code;
+        }
     }
 
     private String normalizeInput(String value) { return value.replace("\r\n", "\n"); }

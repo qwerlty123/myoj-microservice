@@ -1,6 +1,7 @@
 package com.qwerlty.myojbackendaiservice.service.impl;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.io.JsonEOFException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.qwerlty.myojbackendaiservice.common.ErrorCode;
@@ -32,6 +33,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.ai.retry.TransientAiException;
+import org.springframework.ai.tool.execution.ToolExecutionException;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.HttpStatusCodeException;
@@ -482,7 +484,8 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
     }
 
     private boolean isRetryable(Throwable throwable) {
-        return throwable instanceof GenerationValidationException
+        return isTruncatedToolArguments(throwable)
+                || throwable instanceof GenerationValidationException
                 || throwable instanceof ResourceAccessException
                 || throwable instanceof TransientAiException
                 || throwable instanceof HttpServerErrorException
@@ -493,6 +496,7 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
     }
 
     private String classify(Throwable throwable) {
+        if (isTruncatedToolArguments(throwable)) return "MODEL_OUTPUT_INVALID";
         if (throwable instanceof SandboxConfigurationException) return "SANDBOX_MISCONFIGURED";
         if (throwable instanceof GenerationValidationException) return "QUALITY_GATE_FAILED";
         if (throwable instanceof TransientAiException) return "MODEL_UNAVAILABLE";
@@ -514,6 +518,7 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
             case "SANDBOX_MISCONFIGURED" -> "代码沙箱运行环境配置错误";
             case "DEPENDENCY_UNAVAILABLE" -> "模型或代码沙箱暂时不可用";
             case "MODEL_UNAVAILABLE" -> "模型服务暂时不可用";
+            case "MODEL_OUTPUT_INVALID" -> "模型工具参数不完整，已安排重试";
             case "DEPENDENCY_RATE_LIMITED" -> "模型或代码沙箱触发限流";
             case "DEPENDENCY_TIMEOUT" -> "模型或代码沙箱调用超时";
             case "WORKER_BUSY" -> "AI 出题执行资源繁忙";
@@ -523,6 +528,16 @@ public class GenerationTaskServiceImpl implements GenerationTaskService {
 
     private String truncate(String value) {
         return value.length() <= 500 ? value : value.substring(0, 500);
+    }
+
+    private boolean isTruncatedToolArguments(Throwable throwable) {
+        if (!(throwable instanceof ToolExecutionException)) return false;
+        Throwable cause = throwable.getCause();
+        while (cause != null && cause != cause.getCause()) {
+            if (cause instanceof JsonEOFException) return true;
+            cause = cause.getCause();
+        }
+        return false;
     }
 
     private long elapsedMillis(long started) {

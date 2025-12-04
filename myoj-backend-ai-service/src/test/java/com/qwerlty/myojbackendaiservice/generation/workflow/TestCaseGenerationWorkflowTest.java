@@ -4,19 +4,25 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qwerlty.myojbackendaiservice.generation.AuthoringAgentModel;
 import com.qwerlty.myojbackendaiservice.generation.ProblemGenerationModel;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CandidateTestInput;
+import com.qwerlty.myojbackendaiservice.model.dto.generation.CaseEvidence;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CoveragePlan;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CoverageRisk;
+import com.qwerlty.myojbackendaiservice.model.dto.generation.GeneratedProblemSpec;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.JudgeConfigValue;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.ProblemSourceDraft;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.ReferenceSolution;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.TestCaseTaskRequest;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.ValidationPrograms;
+import com.qwerlty.myojbackendaiservice.model.enums.AuthoringTaskType;
+import com.qwerlty.myojbackendaiservice.model.enums.GenerationStage;
 import com.qwerlty.myojbackendaiservice.sandbox.CodeSandboxClient;
 import com.qwerlty.myojbackendaiservice.sandbox.SandboxExecuteResponse;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -30,26 +36,6 @@ class TestCaseGenerationWorkflowTest {
 
     @Test
     void agentCanUseValidationFeedbackAcrossRoundsUntilTheHardGatePasses() {
-        ProblemGenerationModel structured = mock(ProblemGenerationModel.class);
-        when(structured.generateCoveragePlan(any(), anyString())).thenReturn(coveragePlan());
-        when(structured.generateReferenceSolution(any(), anyString()))
-                .thenAnswer(invocation -> solution(invocation.getArgument(1)));
-        ValidationPrograms programs = new ValidationPrograms();
-        programs.setValidatorJava("validator");
-        programs.setOracleJava("oracle");
-        when(structured.generateValidationPrograms(any())).thenReturn(programs);
-
-        CodeSandboxClient sandbox = mock(CodeSandboxClient.class);
-        when(sandbox.execute(anyString(), anyString(), anyList(), anyLong(), anyLong(), anyLong()))
-                .thenAnswer(invocation -> {
-                    String code = invocation.getArgument(1);
-                    List<String> inputs = invocation.getArgument(2);
-                    if ("validator".equals(code)) {
-                        return successful(inputs.stream().map(input -> input.equals("bad") ? "INVALID" : "VALID").toList());
-                    }
-                    return successful(inputs.stream().map(input -> "out:" + input).toList());
-                });
-
         AuthoringAgentModel agent = new AuthoringAgentModel() {
             @Override
             public void generateTestCases(TestCaseAgentPrompt prompt, TestCaseAgentTools tools) {
@@ -70,16 +56,130 @@ class TestCaseGenerationWorkflowTest {
                 throw new UnsupportedOperationException();
             }
         };
-        TestCaseGenerationWorkflow workflow = new TestCaseGenerationWorkflow(
-                structured, agent, new SandboxBatchVerifier(sandbox), new ObjectMapper());
-
-        var artifact = workflow.execute(WorkflowContext.testing(2L), request());
+        var artifact = workflow(agent).execute(WorkflowContext.testing(2L), request());
 
         assertThat(artifact.getJudgeCases()).hasSize(10);
         assertThat(artifact.getCoverage().getRejectedCount()).isEqualTo(1);
         assertThat(artifact.getCoverage().getUncoveredRiskIds()).isEmpty();
         assertThat(artifact.getToolTrace()).hasSize(2);
         assertThat(artifact.getJudgeCases()).extracting("output").contains("out:0", "out:9");
+    }
+
+    @Test
+    void toolReservesCapacityForRequiredCategoriesBeforeCountCanReachTarget() {
+        AuthoringAgentModel agent = new AuthoringAgentModel() {
+            @Override
+            public void generateTestCases(TestCaseAgentPrompt prompt, TestCaseAgentTools tools) {
+                List<CandidateTestInput> normalCases = new ArrayList<>();
+                for (int index = 0; index < 8; index++) {
+                    normalCases.add(candidate("normal-" + index, "NORMAL", null));
+                }
+                var first = tools.evaluateCandidateCases(normalCases);
+                assertThat(first.getAccepted()).isEqualTo(7);
+                assertThat(first.getRejected()).isEqualTo(1);
+                assertThat(first.getMissingCategories())
+                        .containsExactly("BOUNDARY", "MAXIMUM", "ADVERSARIAL");
+                var second = tools.evaluateCandidateCases(List.of(
+                        candidate("boundary", "BOUNDARY", null),
+                        candidate("maximum", "MAXIMUM", null),
+                        candidate("adversarial", "ADVERSARIAL", null)));
+                assertThat(second.getTotalAccepted()).isEqualTo(10);
+                assertThat(second.getMissingCategories()).isEmpty();
+            }
+
+            @Override
+            public com.qwerlty.myojbackendaiservice.model.dto.generation.QualityModelReview reviewQuality(
+                    QualityAgentPrompt prompt, QualityEvidenceTools tools) {
+                throw new UnsupportedOperationException();
+            }
+        };
+
+        var artifact = workflow(agent).execute(WorkflowContext.testing(3L), request());
+
+        assertThat(artifact.getJudgeCases()).hasSize(10);
+        assertThat(artifact.getJudgeCases()).extracting("category")
+                .contains("NORMAL", "BOUNDARY", "MAXIMUM", "ADVERSARIAL");
+        assertThat(artifact.getToolTrace()).extracting(ToolCallTrace::outcome)
+                .containsExactly("CONTINUE", "TARGET_REACHED");
+    }
+
+    @Test
+    void resumedCheckpointWithTenNormalCasesIsRepairedBeforeAgentContinues() {
+        TestCaseGenerationState resumed = new TestCaseGenerationState();
+        GeneratedProblemSpec specification = new GeneratedProblemSpec();
+        specification.setJudgeConfig(new JudgeConfigValue());
+        resumed.setSpecification(specification);
+        resumed.setCoveragePlan(coveragePlan());
+        resumed.setSolutions(List.of(solution("java"), solution("cpp")));
+        ValidationPrograms programs = new ValidationPrograms();
+        programs.setValidatorJava("validator");
+        programs.setOracleJava("oracle");
+        resumed.setPrograms(programs);
+        resumed.setRounds(2);
+        for (int index = 0; index < 10; index++) {
+            CandidateTestInput candidate = candidate("normal-" + index, "NORMAL", null);
+            resumed.getAcceptedCases().add(new AcceptedCaseState(candidate,
+                    "out:" + candidate.getInput(), new CaseEvidence()));
+        }
+
+        ObjectMapper objectMapper = new ObjectMapper();
+        WorkflowCheckpoint checkpoint = new WorkflowCheckpoint(1, "test-v1",
+                GenerationStage.FINAL_VALIDATION.name(), objectMapper.valueToTree(resumed), List.of());
+        WorkflowCheckpointStore store = new WorkflowCheckpointStore() {
+            @Override public Optional<WorkflowCheckpoint> load() { return Optional.of(checkpoint); }
+            @Override public void save(WorkflowCheckpoint ignored) { }
+            @Override public void clear() { }
+        };
+        WorkflowContext context = new WorkflowContext(4L, AuthoringTaskType.TEST_CASES,
+                "test-v1", 60_000L, objectMapper, stage -> { }, store, () -> false,
+                new SimpleMeterRegistry());
+        AuthoringAgentModel agent = new AuthoringAgentModel() {
+            @Override
+            public void generateTestCases(TestCaseAgentPrompt prompt, TestCaseAgentTools tools) {
+                assertThat(tools.categoryCounts()).containsEntry("NORMAL", 7);
+                tools.evaluateCandidateCases(List.of(
+                        candidate("boundary", "BOUNDARY", null),
+                        candidate("maximum", "MAXIMUM", null),
+                        candidate("adversarial", "ADVERSARIAL", null)));
+            }
+
+            @Override
+            public com.qwerlty.myojbackendaiservice.model.dto.generation.QualityModelReview reviewQuality(
+                    QualityAgentPrompt prompt, QualityEvidenceTools tools) {
+                throw new UnsupportedOperationException();
+            }
+        };
+
+        var artifact = workflow(agent).execute(context, request());
+
+        assertThat(artifact.getJudgeCases()).hasSize(10);
+        assertThat(artifact.getJudgeCases()).extracting("category")
+                .contains("NORMAL", "BOUNDARY", "MAXIMUM", "ADVERSARIAL");
+    }
+
+    private TestCaseGenerationWorkflow workflow(AuthoringAgentModel agent) {
+        ProblemGenerationModel structured = mock(ProblemGenerationModel.class);
+        when(structured.generateCoveragePlan(any(), anyString())).thenReturn(coveragePlan());
+        when(structured.generateReferenceSolution(any(), anyString()))
+                .thenAnswer(invocation -> solution(invocation.getArgument(1)));
+        ValidationPrograms programs = new ValidationPrograms();
+        programs.setValidatorJava("validator");
+        programs.setOracleJava("oracle");
+        when(structured.generateValidationPrograms(any())).thenReturn(programs);
+
+        CodeSandboxClient sandbox = mock(CodeSandboxClient.class);
+        when(sandbox.execute(anyString(), anyString(), anyList(), anyLong(), anyLong(), anyLong()))
+                .thenAnswer(invocation -> {
+                    String code = invocation.getArgument(1);
+                    List<String> inputs = invocation.getArgument(2);
+                    if ("validator".equals(code)) {
+                        return successful(inputs.stream()
+                                .map(input -> input.equals("bad") ? "INVALID" : "VALID").toList());
+                    }
+                    return successful(inputs.stream().map(input -> "out:" + input).toList());
+                });
+        return new TestCaseGenerationWorkflow(
+                structured, agent, new SandboxBatchVerifier(sandbox), new ObjectMapper());
     }
 
     private TestCaseTaskRequest request() {

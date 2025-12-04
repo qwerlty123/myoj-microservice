@@ -34,7 +34,10 @@ public class SpringAiAuthoringAgentModel implements AuthoringAgentModel {
     public void generateTestCases(TestCaseAgentPrompt prompt, TestCaseAgentTools tools) {
         String user = """
                 为题目生成完整测试输入。必须反复调用 evaluateCandidateCases，每次至多提交10项；
-                根据工具返回的拒绝原因和覆盖缺口继续补充，直到 totalAccepted 达到 %d。
+                根据工具返回的拒绝原因和覆盖缺口继续补充，直到 totalAccepted 达到 %d，并且
+                missingCategories 为空。category 必须且只能填写 NORMAL、BOUNDARY、MAXIMUM、
+                ADVERSARIAL 之一；优先补齐 missingCategories，不能只生成 NORMAL。
+                当前已验收类别计数为 %s，仍缺少 %s。
                 工具参数 JSON 总计不得超过 32 KiB。input 只用于 8 KiB 内的小输入；大规模输入绝不能
                 逐项展开成长字符串，必须使用 chunks 让 Java 端生成。例如 10 万个递增整数应表示为：
                 [{"type":"LITERAL","value":"100000\\n"},
@@ -43,7 +46,8 @@ public class SpringAiAuthoringAgentModel implements AuthoringAgentModel {
                 REPEAT 用于重复同一文本，CYCLE 用于循环一组短文本；片段之间不会自动插入分隔符。
                 不要自行计算期望输出。达到目标或工具拒绝继续后，用一句话结束。
                 <task>%s</task>
-                """.formatted(prompt.targetCount(), json(prompt));
+                """.formatted(prompt.targetCount(), tools.categoryCounts(),
+                tools.missingRequiredCategories(), json(prompt));
         chatClient.prompt().system(SYSTEM).user(user).tools(tools).call().content();
     }
 

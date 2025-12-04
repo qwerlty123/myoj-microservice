@@ -53,7 +53,8 @@ class SpringAiAuthoringAgentModelTest {
 
         assertThat(chatModel.prompts).hasSize(2);
         assertThat(chatModel.prompts.get(0).getContents())
-                .contains("大规模输入绝不能", "RANGE", "32 KiB");
+                .contains("大规模输入绝不能", "RANGE", "32 KiB",
+                        "missingCategories 为空", "不能只生成 NORMAL");
         assertThat(chatModel.prompts.get(1).getInstructions())
                 .anyMatch(ToolResponseMessage.class::isInstance);
         assertThat(state.getRounds()).isEqualTo(1);

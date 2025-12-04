@@ -22,6 +22,8 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 public class TestCaseAgentTools {
+    public static final List<String> REQUIRED_CATEGORIES =
+            List.of("NORMAL", "BOUNDARY", "MAXIMUM", "ADVERSARIAL");
     private static final int MAX_ROUNDS = 8;
     private static final int MAX_BATCH_SIZE = 10;
     private static final int MAX_INPUT_BYTES = 1024 * 1024;
@@ -46,7 +48,8 @@ public class TestCaseAgentTools {
     }
 
     @Tool(description = "提交候选测试输入并获得沙箱验收结果。每次最多10项，工具参数JSON总计不得超过32KiB；"
-            + "input只用于8KiB以内的小输入，大输入必须用LITERAL/REPEAT/RANGE/CYCLE chunks压缩表示，禁止展开成长字符串。")
+            + "input只用于8KiB以内的小输入，大输入必须用LITERAL/REPEAT/RANGE/CYCLE chunks压缩表示；"
+            + "category必须是NORMAL/BOUNDARY/MAXIMUM/ADVERSARIAL，并覆盖全部四类。")
     public CandidateEvaluationResult evaluateCandidateCases(
             @ToolParam(description = "候选输入列表，不得包含期望输出，最多10项；每项的input与chunks必须二选一")
             List<CandidateTestInput> candidates) {
@@ -69,6 +72,13 @@ public class TestCaseAgentTools {
                 preliminary.add(new CandidateRejection("empty", "输入为空"));
                 continue;
             }
+            String category = parseCategory(candidate.getCategory());
+            if (category == null) {
+                preliminary.add(new CandidateRejection("category",
+                        "category 必须是 NORMAL、BOUNDARY、MAXIMUM、ADVERSARIAL 之一"));
+                continue;
+            }
+            candidate.setCategory(category);
             try {
                 int candidateDescriptorBytes = descriptorBytes(candidate);
                 if (candidateDescriptorBytes > MAX_TOOL_DESCRIPTOR_BYTES - descriptorBytes) {
@@ -86,14 +96,21 @@ public class TestCaseAgentTools {
                 continue;
             }
             candidate.setInput(normalizeInput(candidate.getInput()));
-            candidate.setCategory(normalizeCategory(candidate.getCategory()));
             candidate.setRiskIds(candidate.getRiskIds() == null ? List.of() : candidate.getRiskIds());
             if (candidate.getInput().getBytes(StandardCharsets.UTF_8).length > MAX_INPUT_BYTES) {
                 preliminary.add(new CandidateRejection("oversize", "单个输入超过 1 MiB"));
-            } else if (!seen.add(candidate.getInput())) {
+            } else if (seen.contains(candidate.getInput())) {
                 preliminary.add(new CandidateRejection("duplicate", "输入与已验收或本轮候选重复"));
             } else if (state.getAcceptedCases().size() + unique.size() < targetCount) {
-                unique.add(candidate);
+                if (preservesRequiredCategoryCapacity(candidate.getCategory(), unique)) {
+                    seen.add(candidate.getInput());
+                    unique.add(candidate);
+                } else {
+                    preliminary.add(new CandidateRejection("category_capacity",
+                            "必须为缺失类别预留名额: " + String.join(", ", missingAfter(unique))));
+                }
+            } else {
+                preliminary.add(new CandidateRejection("capacity", "已达到目标数量，不再接收额外候选"));
             }
         }
         BatchVerificationResult verification = verifier.verify(unique, state.getSolutions(),
@@ -105,9 +122,10 @@ public class TestCaseAgentTools {
         state.setRejectedCount(state.getRejectedCount() + rejections.size());
         int acceptedThisRound = verification.accepted().size();
         long latency = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+        boolean targetReached = targetReached();
         context.recordToolCall(new ToolCallTrace(state.getRounds(), "evaluateCandidateCases",
                 candidates.size(), acceptedThisRound, rejections.size(), latency,
-                state.getAcceptedCases().size() >= targetCount ? "TARGET_REACHED" : "CONTINUE"));
+                targetReached ? "TARGET_REACHED" : "CONTINUE"));
         context.meterRegistry().counter("ai_authoring_tool_calls_total",
                 "type", context.taskType().name(),
                 "tool", "evaluateCandidateCases",
@@ -118,7 +136,37 @@ public class TestCaseAgentTools {
         return new CandidateEvaluationResult(state.getRounds(), candidates.size(), acceptedThisRound,
                 rejections.size(), state.getAcceptedCases().size(),
                 Math.max(0, targetCount - state.getAcceptedCases().size()), categoryCounts(),
-                uncoveredRiskIds(), rejections);
+                missingRequiredCategories(), uncoveredRiskIds(), rejections);
+    }
+
+    public int reopenSlotsForMissingCategories() {
+        if (targetCount < REQUIRED_CATEGORIES.size()) {
+            throw new GenerationValidationException("目标用例数量不能小于必选类别数量");
+        }
+        int removed = 0;
+        Map<String, Integer> counts = categoryCounts();
+        while (targetCount - state.getAcceptedCases().size() < missingRequiredCategories().size()) {
+            int removable = findRemovableCase(counts);
+            if (removable < 0) break;
+            AcceptedCaseState discarded = state.getAcceptedCases().remove(removable);
+            counts.computeIfPresent(storedCategory(discarded.getCandidate().getCategory()),
+                    (category, count) -> Math.max(0, count - 1));
+            removed++;
+        }
+        if (removed > 0) {
+            state.setRejectedCount(state.getRejectedCount() + removed);
+            context.meterRegistry().counter("ai_authoring_category_repairs_total",
+                    "type", context.taskType().name()).increment(removed);
+            context.checkpoint(GenerationStage.AGENT_GENERATING_CASES, state);
+        }
+        return removed;
+    }
+
+    public List<String> missingRequiredCategories() {
+        Map<String, Integer> counts = categoryCounts();
+        return REQUIRED_CATEGORIES.stream()
+                .filter(category -> counts.getOrDefault(category, 0) == 0)
+                .toList();
     }
 
     public List<String> uncoveredRiskIds() {
@@ -131,10 +179,41 @@ public class TestCaseAgentTools {
 
     public Map<String, Integer> categoryCounts() {
         Map<String, Integer> counts = new LinkedHashMap<>();
-        for (String category : List.of("NORMAL", "BOUNDARY", "MAXIMUM", "ADVERSARIAL")) counts.put(category, 0);
+        for (String category : REQUIRED_CATEGORIES) counts.put(category, 0);
         state.getAcceptedCases().forEach(item -> counts.merge(
-                normalizeCategory(item.getCandidate().getCategory()), 1, Integer::sum));
+                storedCategory(item.getCandidate().getCategory()), 1, Integer::sum));
         return counts;
+    }
+
+    private boolean preservesRequiredCategoryCapacity(String category, List<CandidateTestInput> pending) {
+        Set<String> covered = new LinkedHashSet<>();
+        state.getAcceptedCases().forEach(item -> covered.add(storedCategory(item.getCandidate().getCategory())));
+        pending.forEach(item -> covered.add(storedCategory(item.getCategory())));
+        covered.add(category);
+        int acceptedAfter = state.getAcceptedCases().size() + pending.size() + 1;
+        long missingAfter = REQUIRED_CATEGORIES.stream().filter(required -> !covered.contains(required)).count();
+        return targetCount - acceptedAfter >= missingAfter;
+    }
+
+    private List<String> missingAfter(List<CandidateTestInput> pending) {
+        Set<String> covered = new LinkedHashSet<>();
+        state.getAcceptedCases().forEach(item -> covered.add(storedCategory(item.getCandidate().getCategory())));
+        pending.forEach(item -> covered.add(storedCategory(item.getCategory())));
+        return REQUIRED_CATEGORIES.stream().filter(category -> !covered.contains(category)).toList();
+    }
+
+    private int findRemovableCase(Map<String, Integer> counts) {
+        for (int index = state.getAcceptedCases().size() - 1; index >= 0; index--) {
+            String category = storedCategory(state.getAcceptedCases().get(index).getCandidate().getCategory());
+            if (!REQUIRED_CATEGORIES.contains(category) || counts.getOrDefault(category, 0) > 1) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private boolean targetReached() {
+        return state.getAcceptedCases().size() >= targetCount && missingRequiredCategories().isEmpty();
     }
 
     private JudgeConfigValue config() {
@@ -291,9 +370,13 @@ public class TestCaseAgentTools {
     }
 
     private String normalizeInput(String value) { return value.replace("\r\n", "\n"); }
-    private String normalizeCategory(String value) {
-        String normalized = value == null ? "NORMAL" : value.trim().toUpperCase(Locale.ROOT);
-        return Set.of("NORMAL", "BOUNDARY", "MAXIMUM", "ADVERSARIAL", "EXAMPLE").contains(normalized)
-                ? normalized : "NORMAL";
+    private String parseCategory(String value) {
+        if (value == null) return null;
+        String normalized = value.trim().toUpperCase(Locale.ROOT);
+        return REQUIRED_CATEGORIES.contains(normalized) ? normalized : null;
+    }
+    private String storedCategory(String value) {
+        String normalized = parseCategory(value);
+        return normalized == null ? "NORMAL" : normalized;
     }
 }

@@ -22,13 +22,9 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 @Component
 public class TestCaseGenerationWorkflow implements AuthoringWorkflow<TestCaseTaskRequest, TestCaseArtifact> {
-    private static final List<String> REQUIRED_CATEGORIES =
-            List.of("NORMAL", "BOUNDARY", "MAXIMUM", "ADVERSARIAL");
-
     private final ProblemGenerationModel structuredModel;
     private final AuthoringAgentModel agentModel;
     private final SandboxBatchVerifier verifier;
@@ -69,7 +65,8 @@ public class TestCaseGenerationWorkflow implements AuthoringWorkflow<TestCaseTas
         }
         context.stage(GenerationStage.AGENT_GENERATING_CASES);
         TestCaseAgentTools tools = new TestCaseAgentTools(context, verifier, state, target);
-        if (state.getAcceptedCases().size() < target) {
+        tools.reopenSlotsForMissingCategories();
+        if (state.getAcceptedCases().size() < target || !tools.missingRequiredCategories().isEmpty()) {
             agentModel.generateTestCases(new TestCaseAgentPrompt(state.getSpecification(),
                     state.getCoveragePlan(), target, request.getConstraints()), tools);
         }
@@ -122,9 +119,7 @@ public class TestCaseGenerationWorkflow implements AuthoringWorkflow<TestCaseTas
             throw new GenerationValidationException("有效测试用例数量不足，要求 " + target
                     + "，实际 " + state.getAcceptedCases().size());
         }
-        Map<String, Integer> counts = tools.categoryCounts();
-        List<String> missing = REQUIRED_CATEGORIES.stream()
-                .filter(category -> counts.getOrDefault(category, 0) == 0).toList();
+        List<String> missing = tools.missingRequiredCategories();
         if (!missing.isEmpty()) {
             throw new GenerationValidationException("缺少关键测试类别: " + String.join(", ", missing));
         }

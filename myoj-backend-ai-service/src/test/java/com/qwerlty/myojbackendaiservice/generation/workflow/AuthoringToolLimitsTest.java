@@ -67,6 +67,7 @@ class AuthoringToolLimitsTest {
         repeated.setCount(600);
         CandidateTestInput candidate = new CandidateTestInput();
         candidate.setChunks(List.of(repeated));
+        candidate.setCategory("MAXIMUM");
 
         var result = tools.evaluateCandidateCases(List.of(candidate));
 
@@ -75,6 +76,53 @@ class AuthoringToolLimitsTest {
                 .satisfies(rejection -> {
                     assertThat(rejection.inputDigest()).isEqualTo("oversize");
                     assertThat(rejection.reason()).contains("1 MiB");
+                });
+    }
+
+    @Test
+    void testCaseToolReopensSlotsInLegacyCheckpointWithOnlyNormalCases() {
+        SandboxBatchVerifier verifier = mock(SandboxBatchVerifier.class);
+        TestCaseGenerationState state = new TestCaseGenerationState();
+        state.setSpecification(new GeneratedProblemSpec());
+        state.setPrograms(new ValidationPrograms());
+        for (int index = 0; index < 10; index++) {
+            state.getAcceptedCases().add(new AcceptedCaseState(
+                    candidate("normal-" + index), "output", new CaseEvidence()));
+        }
+        TestCaseAgentTools tools = new TestCaseAgentTools(WorkflowContext.testing(1L), verifier, state, 10);
+
+        int removed = tools.reopenSlotsForMissingCategories();
+
+        assertThat(removed).isEqualTo(3);
+        assertThat(state.getAcceptedCases()).hasSize(7);
+        assertThat(tools.missingRequiredCategories())
+                .containsExactly("BOUNDARY", "MAXIMUM", "ADVERSARIAL");
+    }
+
+    @Test
+    void testCaseToolRejectsUnknownCategoryInsteadOfSilentlyTreatingItAsNormal() {
+        SandboxBatchVerifier verifier = mock(SandboxBatchVerifier.class);
+        when(verifier.verify(anyList(), anyList(), any(ValidationPrograms.class), any()))
+                .thenAnswer(invocation -> {
+                    List<CandidateTestInput> candidates = invocation.getArgument(0);
+                    return new BatchVerificationResult(candidates.stream()
+                            .map(candidate -> new VerifiedCandidate(candidate, "output", new CaseEvidence()))
+                            .toList(), List.of(), 0);
+                });
+        TestCaseGenerationState state = new TestCaseGenerationState();
+        state.setSpecification(new GeneratedProblemSpec());
+        state.setPrograms(new ValidationPrograms());
+        TestCaseAgentTools tools = new TestCaseAgentTools(WorkflowContext.testing(1L), verifier, state, 10);
+        CandidateTestInput candidate = candidate("unknown-category");
+        candidate.setCategory("边界");
+
+        var result = tools.evaluateCandidateCases(List.of(candidate));
+
+        assertThat(result.getAccepted()).isZero();
+        assertThat(result.getRejections()).singleElement()
+                .satisfies(rejection -> {
+                    assertThat(rejection.inputDigest()).isEqualTo("category");
+                    assertThat(rejection.reason()).contains("BOUNDARY", "MAXIMUM", "ADVERSARIAL");
                 });
     }
 

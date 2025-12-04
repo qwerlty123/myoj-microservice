@@ -16,6 +16,7 @@ public class CandidateEvaluationResult {
     private int totalAccepted;
     private int remaining;
     private Map<String, Integer> categoryCounts;
+    private List<String> missingCategories = new ArrayList<>();
     private List<String> uncoveredRiskIds = new ArrayList<>();
     private List<CandidateRejection> rejections = new ArrayList<>();
 }

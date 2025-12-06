@@ -127,6 +127,29 @@ class AuthoringToolLimitsTest {
     }
 
     @Test
+    void testCaseToolRecordsFailedSandboxRoundBeforeRethrowing() {
+        SandboxBatchVerifier verifier = mock(SandboxBatchVerifier.class);
+        when(verifier.verify(anyList(), anyList(), any(ValidationPrograms.class), any()))
+                .thenThrow(new GenerationValidationException("sandbox verification failed"));
+        TestCaseGenerationState state = new TestCaseGenerationState();
+        state.setSpecification(new GeneratedProblemSpec());
+        state.setPrograms(new ValidationPrograms());
+        WorkflowContext context = WorkflowContext.testing(1L);
+        TestCaseAgentTools tools = new TestCaseAgentTools(context, verifier, state, 10);
+
+        assertThatThrownBy(() -> tools.evaluateCandidateCases(List.of(candidate("sandbox-error"))))
+                .isInstanceOf(GenerationValidationException.class)
+                .hasMessageContaining("sandbox verification failed");
+
+        assertThat(context.toolTrace()).singleElement()
+                .satisfies(trace -> {
+                    assertThat(trace.round()).isEqualTo(1);
+                    assertThat(trace.outcome()).isEqualTo("TOOL_ERROR");
+                    assertThat(trace.errorType()).isEqualTo("GenerationValidationException");
+                });
+    }
+
+    @Test
     void testCaseToolEnforcesBatchAndRoundBudgets() {
         SandboxBatchVerifier verifier = mock(SandboxBatchVerifier.class);
         when(verifier.verify(anyList(), anyList(), any(ValidationPrograms.class), any()))

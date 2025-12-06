@@ -115,7 +115,7 @@ class TestCaseGenerationWorkflowTest {
         programs.setValidatorJava("validator");
         programs.setOracleJava("oracle");
         resumed.setPrograms(programs);
-        resumed.setRounds(2);
+        resumed.setRounds(7);
         for (int index = 0; index < 10; index++) {
             CandidateTestInput candidate = candidate("normal-" + index, "NORMAL", null);
             resumed.getAcceptedCases().add(new AcceptedCaseState(candidate,
@@ -137,10 +137,11 @@ class TestCaseGenerationWorkflowTest {
             @Override
             public void generateTestCases(TestCaseAgentPrompt prompt, TestCaseAgentTools tools) {
                 assertThat(tools.categoryCounts()).containsEntry("NORMAL", 7);
-                tools.evaluateCandidateCases(List.of(
+                var result = tools.evaluateCandidateCases(List.of(
                         candidate("boundary", "BOUNDARY", null),
                         candidate("maximum", "MAXIMUM", null),
                         candidate("adversarial", "ADVERSARIAL", null)));
+                assertThat(result.getRound()).isEqualTo(1);
             }
 
             @Override
@@ -155,6 +156,42 @@ class TestCaseGenerationWorkflowTest {
         assertThat(artifact.getJudgeCases()).hasSize(10);
         assertThat(artifact.getJudgeCases()).extracting("category")
                 .contains("NORMAL", "BOUNDARY", "MAXIMUM", "ADVERSARIAL");
+    }
+
+    @Test
+    void workflowRestartsAgentWhenModelStopsBeforeTargetIsReached() {
+        int[] invocations = {0};
+        AuthoringAgentModel agent = new AuthoringAgentModel() {
+            @Override
+            public void generateTestCases(TestCaseAgentPrompt prompt, TestCaseAgentTools tools) {
+                invocations[0]++;
+                if (invocations[0] == 1) {
+                    String[] categories = {
+                            "NORMAL", "BOUNDARY", "MAXIMUM", "ADVERSARIAL",
+                            "NORMAL", "NORMAL", "NORMAL", "NORMAL", "NORMAL"
+                    };
+                    List<CandidateTestInput> firstNine = new ArrayList<>();
+                    for (int index = 0; index < categories.length; index++) {
+                        firstNine.add(candidate("early-stop-" + index, categories[index], null));
+                    }
+                    var result = tools.evaluateCandidateCases(firstNine);
+                    assertThat(result.getTotalAccepted()).isEqualTo(9);
+                    return;
+                }
+                tools.evaluateCandidateCases(List.of(candidate("final-case", "NORMAL", null)));
+            }
+
+            @Override
+            public com.qwerlty.myojbackendaiservice.model.dto.generation.QualityModelReview reviewQuality(
+                    QualityAgentPrompt prompt, QualityEvidenceTools tools) {
+                throw new UnsupportedOperationException();
+            }
+        };
+
+        var artifact = workflow(agent).execute(WorkflowContext.testing(5L), request());
+
+        assertThat(invocations[0]).isEqualTo(2);
+        assertThat(artifact.getJudgeCases()).hasSize(10);
     }
 
     private TestCaseGenerationWorkflow workflow(AuthoringAgentModel agent) {

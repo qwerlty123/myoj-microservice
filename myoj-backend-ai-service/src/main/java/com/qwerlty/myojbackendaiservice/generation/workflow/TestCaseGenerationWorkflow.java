@@ -64,11 +64,16 @@ public class TestCaseGenerationWorkflow implements AuthoringWorkflow<TestCaseTas
             context.checkpoint(GenerationStage.PLANNING_COVERAGE, state);
         }
         context.stage(GenerationStage.AGENT_GENERATING_CASES);
+        state.setRounds(0);
         TestCaseAgentTools tools = new TestCaseAgentTools(context, verifier, state, target);
         tools.reopenSlotsForMissingCategories();
-        if (state.getAcceptedCases().size() < target || !tools.missingRequiredCategories().isEmpty()) {
+        while (generationIncomplete(state, tools, target) && tools.hasRemainingRounds()) {
+            int roundsBefore = state.getRounds();
             agentModel.generateTestCases(new TestCaseAgentPrompt(state.getSpecification(),
                     state.getCoveragePlan(), target, request.getConstraints()), tools);
+            if (state.getRounds() == roundsBefore) {
+                throw new GenerationValidationException("测试用例 Agent 未调用验收工具");
+            }
         }
         context.stage(GenerationStage.FINAL_VALIDATION);
         hardGate(state, tools, target);
@@ -123,6 +128,10 @@ public class TestCaseGenerationWorkflow implements AuthoringWorkflow<TestCaseTas
         if (!missing.isEmpty()) {
             throw new GenerationValidationException("缺少关键测试类别: " + String.join(", ", missing));
         }
+    }
+
+    private boolean generationIncomplete(TestCaseGenerationState state, TestCaseAgentTools tools, int target) {
+        return state.getAcceptedCases().size() < target || !tools.missingRequiredCategories().isEmpty();
     }
 
     private CoverageReport coverage(TestCaseGenerationState state, TestCaseAgentTools tools, int target) {

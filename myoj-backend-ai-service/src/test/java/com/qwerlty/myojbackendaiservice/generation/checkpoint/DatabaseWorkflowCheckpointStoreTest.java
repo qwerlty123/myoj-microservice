@@ -51,6 +51,22 @@ class DatabaseWorkflowCheckpointStoreTest {
     }
 
     @Test
+    void loadsLegacyToolTraceWithoutErrorType() {
+        AiProblemGenerationTask task = new AiProblemGenerationTask();
+        task.setWorkflowStateJson("""
+                {"schemaVersion":1,"promptVersion":"authoring-v2","completedStage":"AGENT_GENERATING_CASES",
+                 "data":"ready","toolTrace":[{"round":7,"toolName":"evaluateCandidateCases",
+                 "submitted":1,"accepted":0,"rejected":1,"latencyMs":0,"outcome":"CONTINUE"}]}
+                """);
+        when(mapper.selectById(42L)).thenReturn(task);
+
+        var checkpoint = store().load().orElseThrow();
+
+        assertThat(checkpoint.toolTrace()).singleElement()
+                .satisfies(trace -> assertThat(trace.errorType()).isNull());
+    }
+
+    @Test
     void clearsLargeIntermediateState() {
         store().clear();
 

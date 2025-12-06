@@ -7,5 +7,11 @@ public record ToolCallTrace(
         int accepted,
         int rejected,
         long latencyMs,
-        String outcome) {
+        String outcome,
+        String errorType) {
+
+    public ToolCallTrace(int round, String toolName, int submitted, int accepted,
+                         int rejected, long latencyMs, String outcome) {
+        this(round, toolName, submitted, accepted, rejected, latencyMs, outcome, null);
+    }
 }

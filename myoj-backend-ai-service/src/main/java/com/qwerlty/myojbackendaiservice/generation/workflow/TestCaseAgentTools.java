@@ -113,8 +113,13 @@ public class TestCaseAgentTools {
                 preliminary.add(new CandidateRejection("capacity", "已达到目标数量，不再接收额外候选"));
             }
         }
-        BatchVerificationResult verification = verifier.verify(unique, state.getSolutions(),
-                state.getPrograms(), config());
+        BatchVerificationResult verification;
+        try {
+            verification = verifier.verify(unique, state.getSolutions(), state.getPrograms(), config());
+        } catch (RuntimeException exception) {
+            recordToolError(candidates.size(), preliminary.size(), started, exception);
+            throw exception;
+        }
         verification.accepted().forEach(item -> state.getAcceptedCases().add(
                 new AcceptedCaseState(item.candidate(), item.output(), item.evidence())));
         List<CandidateRejection> rejections = new ArrayList<>(preliminary);
@@ -137,6 +142,10 @@ public class TestCaseAgentTools {
                 rejections.size(), state.getAcceptedCases().size(),
                 Math.max(0, targetCount - state.getAcceptedCases().size()), categoryCounts(),
                 missingRequiredCategories(), uncoveredRiskIds(), rejections);
+    }
+
+    public boolean hasRemainingRounds() {
+        return state.getRounds() < MAX_ROUNDS;
     }
 
     public int reopenSlotsForMissingCategories() {
@@ -214,6 +223,18 @@ public class TestCaseAgentTools {
 
     private boolean targetReached() {
         return state.getAcceptedCases().size() >= targetCount && missingRequiredCategories().isEmpty();
+    }
+
+    private void recordToolError(int submitted, int rejected, long started, RuntimeException exception) {
+        long latency = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+        String errorType = exception.getClass().getSimpleName();
+        context.recordToolCall(new ToolCallTrace(state.getRounds(), "evaluateCandidateCases",
+                submitted, 0, rejected, latency, "TOOL_ERROR", errorType));
+        context.meterRegistry().counter("ai_authoring_tool_failures_total",
+                "type", context.taskType().name(),
+                "tool", "evaluateCandidateCases",
+                "error", errorType).increment();
+        context.checkpoint(GenerationStage.AGENT_GENERATING_CASES, state);
     }
 
     private JudgeConfigValue config() {

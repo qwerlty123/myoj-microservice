@@ -38,7 +38,7 @@ public class SandboxBatchVerifier {
             throw new GenerationValidationException("缺少输入校验器或小数据 Oracle");
         }
         List<String> inputs = candidates.stream().map(CandidateTestInput::getInput).toList();
-        SandboxExecuteResponse validator = execute("java", programs.getValidatorJava(), inputs, judgeConfig);
+        SandboxExecuteResponse validator = execute("输入校验器", "java", programs.getValidatorJava(), inputs, judgeConfig);
         List<Integer> validIndexes = new ArrayList<>();
         List<CandidateRejection> rejected = new ArrayList<>();
         for (int index = 0; index < candidates.size(); index++) {
@@ -58,7 +58,8 @@ public class SandboxBatchVerifier {
             if (solution == null || blank(solution.getLanguage()) || blank(solution.getCode())) {
                 throw new GenerationValidationException("参考实现不完整");
             }
-            SandboxExecuteResponse response = execute(solution.getLanguage(), solution.getCode(), validInputs, judgeConfig);
+            SandboxExecuteResponse response = execute(solution.getLanguage() + " 校验解",
+                    solution.getLanguage(), solution.getCode(), validInputs, judgeConfig);
             languageOutputs.put(solution.getLanguage(), response.getOutputList().stream().map(this::normalize).toList());
         }
         List<String> javaOutputs = languageOutputs.get("java");
@@ -74,7 +75,8 @@ public class SandboxBatchVerifier {
         }
         Map<Integer, String> oracleOutputs = new LinkedHashMap<>();
         if (!oracleInputs.isEmpty()) {
-            SandboxExecuteResponse oracle = execute("java", programs.getOracleJava(), oracleInputs, relaxed(judgeConfig));
+            SandboxExecuteResponse oracle = execute("小数据 Oracle", "java", programs.getOracleJava(),
+                    oracleInputs, relaxed(judgeConfig));
             for (int index = 0; index < oraclePositions.size(); index++) {
                 oracleOutputs.put(oraclePositions.get(index), normalize(oracle.getOutputList().get(index)));
             }
@@ -112,14 +114,29 @@ public class SandboxBatchVerifier {
         return new BatchVerificationResult(accepted, rejected, oracleInputs.size());
     }
 
-    private SandboxExecuteResponse execute(String language, String code, List<String> inputs, JudgeConfigValue config) {
+    private SandboxExecuteResponse execute(String phase,
+                                           String language,
+                                           String code,
+                                           List<String> inputs,
+                                           JudgeConfigValue config) {
         SandboxExecuteResponse response = sandboxClient.execute(language, code, inputs,
                 config.getTimeLimit(), config.getMemoryLimit(), config.getStackLimit());
         if (response == null || !Integer.valueOf(1).equals(response.getStatus())
                 || response.getOutputList() == null || response.getOutputList().size() != inputs.size()) {
-            throw new GenerationValidationException("代码沙箱批量验证失败");
+            throw new GenerationValidationException(failureSummary(phase, response, inputs.size()));
         }
         return response;
+    }
+
+    private String failureSummary(String phase, SandboxExecuteResponse response, int expectedOutputs) {
+        if (response == null) return phase + "执行失败: 沙箱返回为空";
+        int actualOutputs = response.getOutputList() == null ? -1 : response.getOutputList().size();
+        String message = response.getMessage() == null ? "" : response.getMessage()
+                .replaceAll("\\s+", " ").trim();
+        if (message.length() > 160) message = message.substring(0, 160);
+        return phase + "执行失败: status=" + response.getStatus()
+                + ", outputs=" + actualOutputs + "/" + expectedOutputs
+                + (message.isEmpty() ? "" : ", message=" + message);
     }
 
     private JudgeConfigValue relaxed(JudgeConfigValue source) {

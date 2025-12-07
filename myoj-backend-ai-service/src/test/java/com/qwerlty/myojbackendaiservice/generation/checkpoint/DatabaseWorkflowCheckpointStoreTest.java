@@ -63,7 +63,10 @@ class DatabaseWorkflowCheckpointStoreTest {
         var checkpoint = store().load().orElseThrow();
 
         assertThat(checkpoint.toolTrace()).singleElement()
-                .satisfies(trace -> assertThat(trace.errorType()).isNull());
+                .satisfies(trace -> {
+                    assertThat(trace.errorType()).isNull();
+                    assertThat(trace.errorSummary()).isNull();
+                });
     }
 
     @Test

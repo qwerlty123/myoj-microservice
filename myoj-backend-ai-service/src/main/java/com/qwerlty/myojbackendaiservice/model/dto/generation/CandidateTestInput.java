@@ -15,6 +15,8 @@ public class CandidateTestInput {
 
     @JsonPropertyDescription("必填测试类别，只能是 NORMAL、BOUNDARY、MAXIMUM、ADVERSARIAL 之一")
     private String category;
+
+    @JsonPropertyDescription("由 Java 验收工具根据类别和输入规模覆盖，模型传值不作为 Oracle 执行依据")
     private Boolean oracleEligible = true;
     private List<String> riskIds = new ArrayList<>();
 }

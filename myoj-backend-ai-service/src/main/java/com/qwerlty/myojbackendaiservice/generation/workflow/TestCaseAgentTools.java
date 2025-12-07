@@ -28,6 +28,7 @@ public class TestCaseAgentTools {
     private static final int MAX_BATCH_SIZE = 10;
     private static final int MAX_INPUT_BYTES = 1024 * 1024;
     private static final int MAX_DIRECT_INPUT_BYTES = 8 * 1024;
+    private static final int MAX_ORACLE_INPUT_BYTES = MAX_DIRECT_INPUT_BYTES;
     private static final int MAX_TOOL_DESCRIPTOR_BYTES = 32 * 1024;
     private static final int MAX_CHUNKS = 32;
     private static final int MAX_EXPANSION_ITEMS = 1_000_000;
@@ -87,6 +88,7 @@ public class TestCaseAgentTools {
                 descriptorBytes += candidateDescriptorBytes;
                 candidate.setInput(materializeInput(candidate));
                 candidate.setChunks(List.of());
+                enforceOraclePolicy(candidate);
             } catch (CandidateInputException exception) {
                 preliminary.add(new CandidateRejection(exception.code, exception.getMessage()));
                 continue;
@@ -153,6 +155,13 @@ public class TestCaseAgentTools {
             throw new GenerationValidationException("目标用例数量不能小于必选类别数量");
         }
         int removed = 0;
+        boolean oraclePolicyRepaired = false;
+        for (AcceptedCaseState acceptedCase : state.getAcceptedCases()) {
+            CandidateTestInput candidate = acceptedCase.getCandidate();
+            Boolean before = candidate.getOracleEligible();
+            enforceOraclePolicy(candidate);
+            oraclePolicyRepaired |= !java.util.Objects.equals(before, candidate.getOracleEligible());
+        }
         Map<String, Integer> counts = categoryCounts();
         while (targetCount - state.getAcceptedCases().size() < missingRequiredCategories().size()) {
             int removable = findRemovableCase(counts);
@@ -166,6 +175,8 @@ public class TestCaseAgentTools {
             state.setRejectedCount(state.getRejectedCount() + removed);
             context.meterRegistry().counter("ai_authoring_category_repairs_total",
                     "type", context.taskType().name()).increment(removed);
+        }
+        if (removed > 0 || oraclePolicyRepaired) {
             context.checkpoint(GenerationStage.AGENT_GENERATING_CASES, state);
         }
         return removed;
@@ -229,12 +240,26 @@ public class TestCaseAgentTools {
         long latency = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
         String errorType = exception.getClass().getSimpleName();
         context.recordToolCall(new ToolCallTrace(state.getRounds(), "evaluateCandidateCases",
-                submitted, 0, rejected, latency, "TOOL_ERROR", errorType));
+                submitted, 0, rejected, latency, "TOOL_ERROR", errorType, safeSummary(exception)));
         context.meterRegistry().counter("ai_authoring_tool_failures_total",
                 "type", context.taskType().name(),
                 "tool", "evaluateCandidateCases",
                 "error", errorType).increment();
         context.checkpoint(GenerationStage.AGENT_GENERATING_CASES, state);
+    }
+
+    private void enforceOraclePolicy(CandidateTestInput candidate) {
+        int inputBytes = candidate.getInput() == null ? 0
+                : candidate.getInput().getBytes(StandardCharsets.UTF_8).length;
+        candidate.setOracleEligible(!"MAXIMUM".equals(candidate.getCategory())
+                && inputBytes <= MAX_ORACLE_INPUT_BYTES);
+    }
+
+    private String safeSummary(RuntimeException exception) {
+        String message = exception.getMessage();
+        if (message == null || message.isBlank()) return exception.getClass().getSimpleName();
+        String singleLine = message.replaceAll("\\s+", " ").trim();
+        return singleLine.length() <= 240 ? singleLine : singleLine.substring(0, 240);
     }
 
     private JudgeConfigValue config() {

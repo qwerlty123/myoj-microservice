@@ -24,10 +24,12 @@ class AuthoringToolLimitsTest {
     void testCaseToolExpandsCompactRangeBeforeSandboxVerification() {
         SandboxBatchVerifier verifier = mock(SandboxBatchVerifier.class);
         AtomicReference<String> verifiedInput = new AtomicReference<>();
+        AtomicReference<Boolean> oracleEligible = new AtomicReference<>();
         when(verifier.verify(anyList(), anyList(), any(ValidationPrograms.class), any()))
                 .thenAnswer(invocation -> {
                     List<CandidateTestInput> candidates = invocation.getArgument(0);
                     verifiedInput.set(candidates.get(0).getInput());
+                    oracleEligible.set(candidates.get(0).getOracleEligible());
                     return new BatchVerificationResult(List.of(), List.of(), 0);
                 });
         TestCaseGenerationState state = new TestCaseGenerationState();
@@ -45,6 +47,7 @@ class AuthoringToolLimitsTest {
         tools.evaluateCandidateCases(List.of(candidate));
 
         assertThat(verifiedInput).hasValue("5\n1 2 3 4 5\n");
+        assertThat(oracleEligible).hasValue(false);
     }
 
     @Test
@@ -146,6 +149,7 @@ class AuthoringToolLimitsTest {
                     assertThat(trace.round()).isEqualTo(1);
                     assertThat(trace.outcome()).isEqualTo("TOOL_ERROR");
                     assertThat(trace.errorType()).isEqualTo("GenerationValidationException");
+                    assertThat(trace.errorSummary()).isEqualTo("sandbox verification failed");
                 });
     }
 

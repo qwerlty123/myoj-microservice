@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -45,6 +46,20 @@ class SandboxBatchVerifierTest {
         assertThat(result.accepted()).isEmpty();
         assertThat(result.rejected()).singleElement().satisfies(rejection ->
                 assertThat(rejection.reason()).contains("Oracle 输出不一致"));
+    }
+
+    @Test
+    void reportsSandboxPhaseStatusAndMessageWhenExecutionFails() {
+        CodeSandboxClient sandbox = mock(CodeSandboxClient.class);
+        SandboxExecuteResponse failed = new SandboxExecuteResponse();
+        failed.setStatus(3);
+        failed.setMessage("运行超时");
+        when(sandbox.execute(anyString(), anyString(), anyList(), anyLong(), anyLong(), anyLong()))
+                .thenReturn(failed);
+
+        assertThatThrownBy(() -> verifier(sandbox).verify(List.of(candidate()),
+                solutions(), programs(), new JudgeConfigValue()))
+                .hasMessageContaining("输入校验器", "status=3", "运行超时");
     }
 
     private SandboxBatchVerifier verifier(CodeSandboxClient sandbox) {

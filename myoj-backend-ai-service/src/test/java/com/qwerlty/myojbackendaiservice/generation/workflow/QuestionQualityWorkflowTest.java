@@ -16,6 +16,7 @@ import com.qwerlty.myojbackendaiservice.sandbox.SandboxExecuteResponse;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -104,6 +105,52 @@ class QuestionQualityWorkflowTest {
             assertThat(patch.getCaseOutputHash()).hasSize(64);
         });
         assertThat(artifact.getToolTrace()).hasSize(1);
+    }
+
+    @Test
+    void qualityReviewRunsSmallDataOracleOnlyForSmallExistingCases() {
+        ProblemGenerationModel structured = mock(ProblemGenerationModel.class);
+        when(structured.generateReferenceSolution(any(), anyString()))
+                .thenAnswer(invocation -> solution(invocation.getArgument(1)));
+        ValidationPrograms programs = new ValidationPrograms();
+        programs.setValidatorJava("validator");
+        programs.setOracleJava("oracle");
+        when(structured.generateValidationPrograms(any())).thenReturn(programs);
+
+        AtomicReference<List<String>> oracleInputs = new AtomicReference<>();
+        CodeSandboxClient sandbox = mock(CodeSandboxClient.class);
+        when(sandbox.execute(anyString(), anyString(), anyList(), anyLong(), anyLong(), anyLong()))
+                .thenAnswer(invocation -> {
+                    String code = invocation.getArgument(1);
+                    List<String> inputs = invocation.getArgument(2);
+                    if ("validator".equals(code)) {
+                        return successful(inputs.stream().map(value -> "VALID").toList());
+                    }
+                    if ("oracle".equals(code)) {
+                        oracleInputs.set(List.copyOf(inputs));
+                        if (inputs.stream().anyMatch(value -> value.length() > 8 * 1024)) {
+                            SandboxExecuteResponse failed = successful(List.of("small-output"));
+                            failed.setStatus(3);
+                            failed.setMessage("StringTokenizer input ended unexpectedly");
+                            return failed;
+                        }
+                    }
+                    return successful(inputs.stream().map(value -> "correct").toList());
+                });
+        AuthoringAgentModel agent = mock(AuthoringAgentModel.class);
+        when(agent.reviewQuality(any(), any())).thenReturn(new QualityModelReview());
+        QuestionQualityWorkflow workflow = new QuestionQualityWorkflow(structured, agent,
+                new SandboxBatchVerifier(sandbox), new ObjectMapper());
+        QualityReviewTaskRequest request = completeRequest();
+        request.getSourceDraft().setJudgeCase(List.of(
+                new GeneratedJudgeCase("1", "correct", "NORMAL"),
+                new GeneratedJudgeCase("x".repeat(900_000), "correct", "MAXIMUM")));
+
+        var artifact = workflow.execute(WorkflowContext.testing(5L), request);
+
+        assertThat(oracleInputs.get()).containsExactly("1");
+        assertThat(artifact.getReport().getVerification().getVerifiedCases()).isEqualTo(2);
+        assertThat(artifact.getReport().getVerification().getOracleCases()).isEqualTo(1);
     }
 
     private QualityReviewTaskRequest completeRequest() {

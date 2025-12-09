@@ -28,7 +28,6 @@ public class TestCaseAgentTools {
     private static final int MAX_BATCH_SIZE = 10;
     private static final int MAX_INPUT_BYTES = 1024 * 1024;
     private static final int MAX_DIRECT_INPUT_BYTES = 8 * 1024;
-    private static final int MAX_ORACLE_INPUT_BYTES = MAX_DIRECT_INPUT_BYTES;
     private static final int MAX_TOOL_DESCRIPTOR_BYTES = 32 * 1024;
     private static final int MAX_CHUNKS = 32;
     private static final int MAX_EXPANSION_ITEMS = 1_000_000;
@@ -88,7 +87,7 @@ public class TestCaseAgentTools {
                 descriptorBytes += candidateDescriptorBytes;
                 candidate.setInput(materializeInput(candidate));
                 candidate.setChunks(List.of());
-                enforceOraclePolicy(candidate);
+                OracleEligibilityPolicy.enforce(candidate);
             } catch (CandidateInputException exception) {
                 preliminary.add(new CandidateRejection(exception.code, exception.getMessage()));
                 continue;
@@ -159,7 +158,7 @@ public class TestCaseAgentTools {
         for (AcceptedCaseState acceptedCase : state.getAcceptedCases()) {
             CandidateTestInput candidate = acceptedCase.getCandidate();
             Boolean before = candidate.getOracleEligible();
-            enforceOraclePolicy(candidate);
+            OracleEligibilityPolicy.enforce(candidate);
             oraclePolicyRepaired |= !java.util.Objects.equals(before, candidate.getOracleEligible());
         }
         Map<String, Integer> counts = categoryCounts();
@@ -246,13 +245,6 @@ public class TestCaseAgentTools {
                 "tool", "evaluateCandidateCases",
                 "error", errorType).increment();
         context.checkpoint(GenerationStage.AGENT_GENERATING_CASES, state);
-    }
-
-    private void enforceOraclePolicy(CandidateTestInput candidate) {
-        int inputBytes = candidate.getInput() == null ? 0
-                : candidate.getInput().getBytes(StandardCharsets.UTF_8).length;
-        candidate.setOracleEligible(!"MAXIMUM".equals(candidate.getCategory())
-                && inputBytes <= MAX_ORACLE_INPUT_BYTES);
     }
 
     private String safeSummary(RuntimeException exception) {

@@ -283,7 +283,7 @@ public class QuestionQualityWorkflow implements AuthoringWorkflow<QualityReviewT
             CandidateTestInput candidate = new CandidateTestInput();
             candidate.setInput(item.getInput());
             candidate.setCategory(item.getCategory());
-            candidate.setOracleEligible(true);
+            OracleEligibilityPolicy.enforce(candidate);
             return candidate;
         }).toList();
     }

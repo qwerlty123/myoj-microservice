@@ -62,7 +62,11 @@ spring:
     listener:
       simple:
         acknowledge-mode: auto
-        prefetch: 1
+        # One long-running judge task per consumer. Keep prefetch at 1 so a
+        # consumer cannot hoard tasks while waiting for the remote sandbox.
+        concurrency: ${JUDGE_CONSUMER_CONCURRENCY:2}
+        max-concurrency: ${JUDGE_CONSUMER_MAX_CONCURRENCY:2}
+        prefetch: ${JUDGE_CONSUMER_PREFETCH:1}
         default-requeue-rejected: false
         retry:
           enabled: true

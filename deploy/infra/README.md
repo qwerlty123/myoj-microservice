@@ -3,13 +3,14 @@
 正确拓扑：
 
 ```text
-本机进程：Gateway、User、Question、Judge、Comment、AI Service、Code Sandbox
+本机进程：Gateway、User、Question、Judge、Comment、AI Service
+服务器进程：Code Sandbox（systemd，内部使用受限 Docker 容器执行代码）
 服务器 Docker：MySQL、Redis、Nacos、RabbitMQ、Qdrant、MinIO
 ```
 
-服务器不需要上传 MyOJ 项目，也不需要安装 JDK 或 Maven。只需要 Docker Engine、Docker Compose v2、curl 和 openssl。
+中间件部署本身不需要上传 MyOJ 项目。Code Sandbox 由 `myoj-codesandbox/scripts/deploy-server.sh` 单独部署，不属于本目录的 Docker Compose。
 
-本目录只部署服务器中间件，不部署任何后端 JAR、源码或沙箱。AI Service 也在本机运行，通过 `QDRANT_HOST`、`MYSQL_URL`、`REDIS_HOST`、`RABBITMQ_HOST` 和 `NACOS_SERVER_ADDR` 连接服务器。
+本目录只部署服务器中间件，不部署任何后端 JAR、源码或沙箱。后端微服务在本机运行，通过 `CODESANDBOX_URL` 调用服务器沙箱，并通过其他连接变量访问服务器中间件。
 
 ## 版本说明
 
@@ -40,7 +41,7 @@ status.sh
 backup.sh
 ```
 
-项目源码、微服务 JAR、Code Sandbox 源码都不需要上传。
+使用本目录部署中间件时，项目源码、微服务 JAR 和 Code Sandbox 源码都不需要上传；沙箱 JAR 由它自己的部署脚本单独发布。
 
 ## 2. 填写配置
 
@@ -66,9 +67,16 @@ NACOS_ADMIN_PASSWORD=adgjl08642
 RABBITMQ_DEFAULT_PASS=adgjl08642
 MINIO_ROOT_PASSWORD=adgjl08642
 CODESANDBOX_SECRET_KEY=adgjl08642
+CODESANDBOX_HOST=124.221.250.220
 AI_INTERNAL_TOKEN=请替换为足够长的随机字符串
+GATEWAY_TRUST_TOKEN=请替换为另一组足够长的随机字符串
 QDRANT_API_KEY=请替换为另一组足够长的随机字符串
 ```
+
+公开 AI 出题前，还必须将 `AI_GENERATION_PUBLIC_ENABLED` 设为 `true`，并显式配置
+`AI_MODEL_PUBLIC_CONCURRENCY`、`AI_MODEL_REVIEW_CONCURRENCY`、两个分流的每日预算以及模型输入/输出单价。
+任一值为 `0` 时 AI Service 会拒绝以公开模式启动。
+即使公共功能关闭，生产环境的管理员创作/质检也会消耗模型费用，因此上述两个分流仍必须完整配置。
 
 当前配置使用 `admin` 作为 MySQL、RabbitMQ 和 MinIO 的业务账号；`MYSQL_USER` 不能填写 `root`。`root` 账号只由 `MYSQL_ROOT_PASSWORD` 配置。
 
@@ -90,7 +98,7 @@ chmod +x /opt/myoj-infra/*.sh
 完整部署脚本和单独的 Qdrant 脚本都会等待健康检查，并验证 `QDRANT_API_KEY` 可以访问集合 API。脚本还会生成：
 
 - `.env.internal`：Nacos 内部 JWT 签名密钥，不是登录密码，无需手动填写；
-- `local-dev.env`：本机微服务和沙箱使用的公网连接配置。
+- `local-dev.env`：本机微服务使用的服务器公网连接配置。
 
 ## 3. Nacos 为什么出现内部 Token
 
@@ -122,7 +130,7 @@ mysql -h 服务器公网IP -P 3306 -u root -p < sql/init_myoj.sql
 scp 用户名@服务器公网IP:/opt/myoj-infra/local-dev.env ./local-dev.env
 ```
 
-每个微服务和 Code Sandbox 启动前加载：
+每个本机微服务启动前加载：
 
 ```bash
 set -a
@@ -130,7 +138,7 @@ source ./local-dev.env
 set +a
 ```
 
-这一步只把服务器连接参数注入本机进程，不会把后端代码上传到服务器。AI Service 启动时会使用其中的 `QDRANT_HOST`、`QDRANT_GRPC_PORT` 和 `QDRANT_API_KEY` 连接远程 RAG 数据库。
+这一步只把服务器连接参数注入本机进程，不会把后端代码上传到服务器。Judge Service 会通过 `CODESANDBOX_URL` 调用远程沙箱；AI Service 会使用其中的 Qdrant 配置连接远程 RAG 数据库。
 
 生成的配置指向：
 
@@ -141,7 +149,7 @@ Nacos      服务器公网IP:8848
 RabbitMQ   服务器公网IP:5672
 Qdrant     服务器公网IP:6333/6334
 MinIO      服务器公网IP:9002
-CodeSandbox 127.0.0.1:8090
+CodeSandbox 服务器公网IP:8090
 ```
 
 本机微服务统一注册到 `LOCAL_DEV_GROUP`。
@@ -151,8 +159,10 @@ CodeSandbox 127.0.0.1:8090
 云安全组放行 TCP：
 
 ```text
-3306, 5672, 6333-6334, 6379, 8848, 9002-9003, 9848-9849, 15672, 15692
+3306, 5672, 6333-6334, 6379, 8090, 8848, 9002-9003, 9848-9849, 15672, 15692
 ```
+
+8090 只需放行给运行 Judge Service 的出口 IP；不要向整个公网开放代码执行入口。`/executeCode` 仍使用时间戳和 HMAC 签名认证。
 
 访问地址：
 

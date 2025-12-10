@@ -27,5 +27,15 @@ codesandbox:
   secretKey: ${CODESANDBOX_SECRET_KEY:adgjl08642}
 
 myoj:
+  security:
+    gateway-token: ${GATEWAY_TRUST_TOKEN}
   ai:
     internal-token: ${AI_INTERNAL_TOKEN}
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+
+logging:
+  level:
+    com.qwerlty.myojbackendquestionservice.controller.QuestionController: WARN

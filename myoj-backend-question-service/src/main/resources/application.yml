@@ -111,8 +111,10 @@ codesandbox:
 # 判题一致性治理（Outbox + 补偿）
 judge-consistency:
   outbox:
-    dispatch-interval-ms: 3000
-    batch-size: 20
+    # Reduce the average enqueue wait from ~1.5s to ~250ms and leave enough
+    # batch headroom for short submission bursts.
+    dispatch-interval-ms: ${JUDGE_OUTBOX_DISPATCH_INTERVAL_MS:500}
+    batch-size: ${JUDGE_OUTBOX_BATCH_SIZE:50}
     max-retry: 8
     lease-ms: 30000
     confirm-timeout-ms: 5000
@@ -128,6 +130,8 @@ load-test:
   crawler-detection-enabled: ${LOAD_TEST_CRAWLER_DETECTION_ENABLED:true}
 
 myoj:
+  security:
+    gateway-token: ${GATEWAY_TRUST_TOKEN:change-me-gateway-token}
   ai:
     internal-token: ${AI_INTERNAL_TOKEN:change-me-internal-token}
 

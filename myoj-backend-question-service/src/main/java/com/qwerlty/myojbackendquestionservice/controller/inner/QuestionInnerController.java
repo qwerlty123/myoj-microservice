@@ -18,6 +18,8 @@ import com.qwerlty.myojbackendquestionservice.model.dto.AiSubmissionHistoryDTO;
 import com.qwerlty.myojbackendquestionservice.service.QuestionService;
 import com.qwerlty.myojbackendquestionservice.service.JudgeTaskCoordinator;
 import com.qwerlty.myojbackendquestionservice.service.QuestionSubmitService;
+import com.qwerlty.myojbackendquestionservice.service.AiQuestionReviewService;
+import com.qwerlty.myojbackendmodel.model.dto.question.QuestionAddRequest;
 import com.qwerlty.myojbackendserviceclient.client.QuestionFeignClient;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Value;
@@ -46,6 +48,9 @@ public class QuestionInnerController implements QuestionFeignClient {
     private QuestionSubmitService questionSubmitService;
 
     @Resource
+    private AiQuestionReviewService aiQuestionReviewService;
+
+    @Resource
     private JudgeTaskCoordinator judgeTaskCoordinator;
 
     @Value("${myoj.ai.internal-token:}")
@@ -56,7 +61,7 @@ public class QuestionInnerController implements QuestionFeignClient {
     public BaseResponse<AiSubmissionContextDTO> getAiSubmissionContext(
             @RequestParam("submissionId") long submissionId,
             @RequestParam("userId") long userId,
-            @RequestHeader(value = "X-Internal-Token", required = false) String internalToken) {
+            @RequestHeader(value = "X-Internal-Service-Token", required = false) String internalToken) {
         checkAiInternalToken(internalToken);
         QuestionSubmit submission = getOwnedTerminalSubmission(submissionId, userId);
         Question question = questionService.getById(submission.getQuestionId());
@@ -86,7 +91,7 @@ public class QuestionInnerController implements QuestionFeignClient {
             @RequestParam("submissionId") long submissionId,
             @RequestParam("userId") long userId,
             @RequestParam(value = "limit", defaultValue = "3") int limit,
-            @RequestHeader(value = "X-Internal-Token", required = false) String internalToken) {
+            @RequestHeader(value = "X-Internal-Service-Token", required = false) String internalToken) {
         checkAiInternalToken(internalToken);
         QuestionSubmit current = getOwnedTerminalSubmission(submissionId, userId);
         int safeLimit = Math.max(1, Math.min(limit, MAX_AI_HISTORY_SIZE));
@@ -114,6 +119,14 @@ public class QuestionInnerController implements QuestionFeignClient {
             result.add(item);
         }
         return ResultUtils.success(result);
+    }
+
+    @GetMapping("/ai/review-submission/snapshot")
+    public BaseResponse<QuestionAddRequest> getAiReviewSubmissionSnapshot(
+            @RequestParam("submissionId") long submissionId,
+            @RequestHeader(value = "X-Internal-Service-Token", required = false) String internalToken) {
+        checkAiInternalToken(internalToken);
+        return ResultUtils.success(aiQuestionReviewService.authoritativeSnapshot(submissionId));
     }
 
     private QuestionSubmit getOwnedTerminalSubmission(long submissionId, long userId) {

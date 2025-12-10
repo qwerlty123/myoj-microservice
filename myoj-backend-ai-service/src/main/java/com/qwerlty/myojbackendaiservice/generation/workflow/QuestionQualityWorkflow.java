@@ -90,8 +90,19 @@ public class QuestionQualityWorkflow implements AuthoringWorkflow<QualityReviewT
         context.stage(GenerationStage.AGENT_EVIDENCE_REVIEW);
         QualityEvidenceTools tools = new QualityEvidenceTools(context,
                 indexes -> inspectEvidence(indexes, state.getBaselineEvidence()));
-        QualityModelReview modelReview = agentModel.reviewQuality(
-                new QualityAgentPrompt(source, List.copyOf(issues), List.copyOf(state.getBaselineEvidence())), tools);
+        QualityModelReview modelReview;
+        try {
+            modelReview = agentModel.reviewQuality(
+                    new QualityAgentPrompt(source, List.copyOf(issues), List.copyOf(state.getBaselineEvidence())), tools);
+        } catch (RuntimeException exception) {
+            context.stage(GenerationStage.BUILDING_REPORT);
+            QualityVerificationSummary degradedSummary = verificationSummary(source, baseline);
+            degradedSummary.setSemanticReviewed(false);
+            degradedSummary.getSkippedChecks().add("模型语义审查暂时不可用");
+            QualityReport degradedReport = report(false, issues, degradedSummary);
+            return new QualityReviewArtifact(sourceHash, degradedReport, patches,
+                    List.copyOf(context.toolTrace()), false);
+        }
         mergeModelReview(source, state, modelReview, issues, patches);
 
         context.stage(GenerationStage.BUILDING_REPORT);

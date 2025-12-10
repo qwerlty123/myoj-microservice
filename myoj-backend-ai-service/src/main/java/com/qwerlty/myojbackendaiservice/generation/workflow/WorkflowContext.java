@@ -19,6 +19,11 @@ public final class WorkflowContext {
     private static final int CHECKPOINT_SCHEMA_VERSION = 1;
 
     private final Long taskId;
+    private final Long userId;
+    private final String role;
+    private final String traceId;
+    private final Long submissionId;
+    private final long deadlineEpochMs;
     private final AuthoringTaskType taskType;
     private final String promptVersion;
     private final long timeoutMs;
@@ -29,6 +34,7 @@ public final class WorkflowContext {
     private final MeterRegistry meterRegistry;
     private final List<ToolCallTrace> toolTrace = new ArrayList<>();
     private final Optional<WorkflowCheckpoint> resumeCheckpoint;
+    private final ToolExecutionGuard toolExecutionGuard;
 
     public WorkflowContext(Long taskId,
                            AuthoringTaskType taskType,
@@ -40,6 +46,11 @@ public final class WorkflowContext {
                            BooleanSupplier cancelled,
                            MeterRegistry meterRegistry) {
         this.taskId = taskId;
+        this.userId = 0L;
+        this.role = "system";
+        this.traceId = "legacy";
+        this.submissionId = null;
+        this.deadlineEpochMs = System.currentTimeMillis() + timeoutMs;
         this.taskType = taskType;
         this.promptVersion = promptVersion;
         this.timeoutMs = timeoutMs;
@@ -48,28 +59,76 @@ public final class WorkflowContext {
         this.checkpointStore = checkpointStore;
         this.cancelled = cancelled;
         this.meterRegistry = meterRegistry;
+        this.toolExecutionGuard = ToolExecutionGuard.noop();
+        Optional<WorkflowCheckpoint> loaded = initializeCheckpoint();
+        this.resumeCheckpoint = loaded;
+    }
+
+    public WorkflowContext(Long taskId,
+                           Long userId,
+                           String role,
+                           String traceId,
+                           Long submissionId,
+                           AuthoringTaskType taskType,
+                           String promptVersion,
+                           long timeoutMs,
+                           ObjectMapper objectMapper,
+                           GenerationProgressListener progressListener,
+                           WorkflowCheckpointStore checkpointStore,
+                           BooleanSupplier cancelled,
+                           MeterRegistry meterRegistry,
+                           ToolExecutionGuard toolExecutionGuard) {
+        this.taskId = taskId;
+        this.userId = userId;
+        this.role = role;
+        this.traceId = traceId;
+        this.submissionId = submissionId;
+        this.deadlineEpochMs = System.currentTimeMillis() + timeoutMs;
+        this.taskType = taskType;
+        this.promptVersion = promptVersion;
+        this.timeoutMs = timeoutMs;
+        this.objectMapper = objectMapper;
+        this.progressListener = progressListener;
+        this.checkpointStore = checkpointStore;
+        this.cancelled = cancelled;
+        this.meterRegistry = meterRegistry;
+        this.toolExecutionGuard = toolExecutionGuard;
+        this.resumeCheckpoint = initializeCheckpoint();
+    }
+
+    private Optional<WorkflowCheckpoint> initializeCheckpoint() {
         Optional<WorkflowCheckpoint> loaded = checkpointStore.load();
-        this.resumeCheckpoint = loaded.filter(checkpoint -> checkpoint.schemaVersion() == CHECKPOINT_SCHEMA_VERSION)
+        Optional<WorkflowCheckpoint> compatible = loaded.filter(checkpoint -> checkpoint.schemaVersion() == CHECKPOINT_SCHEMA_VERSION)
                 .filter(checkpoint -> Objects.equals(promptVersion, checkpoint.promptVersion()));
-        if (loaded.isPresent() && resumeCheckpoint.isEmpty()) {
+        if (loaded.isPresent() && compatible.isEmpty()) {
             checkpointStore.clear();
             meterRegistry.counter("ai_authoring_checkpoints_total",
                     "type", taskType.name(), "operation", "discard_incompatible").increment();
         }
-        resumeCheckpoint.map(WorkflowCheckpoint::toolTrace).ifPresent(trace -> {
+        compatible.map(WorkflowCheckpoint::toolTrace).ifPresent(trace -> {
             if (trace != null) toolTrace.addAll(trace);
         });
-        if (resumeCheckpoint.isPresent()) {
+        if (compatible.isPresent()) {
             meterRegistry.counter("ai_authoring_checkpoint_resumes_total", "type", taskType.name()).increment();
         }
+        return compatible;
     }
 
     public static WorkflowContext testing(Long taskId) {
-        return new WorkflowContext(taskId, AuthoringTaskType.PROBLEM_DRAFT, "test-v1", 60_000L, new ObjectMapper(),
+        return testing(taskId, AuthoringTaskType.PROBLEM_DRAFT);
+    }
+
+    public static WorkflowContext testing(Long taskId, AuthoringTaskType taskType) {
+        return new WorkflowContext(taskId, taskType, "test-v1", 60_000L, new ObjectMapper(),
                 stage -> { }, WorkflowCheckpointStore.noop(), () -> false, new SimpleMeterRegistry());
     }
 
     public Long taskId() { return taskId; }
+    public Long userId() { return userId; }
+    public String role() { return role; }
+    public String traceId() { return traceId; }
+    public Long submissionId() { return submissionId; }
+    public long deadlineEpochMs() { return deadlineEpochMs; }
     public AuthoringTaskType taskType() { return taskType; }
     public long timeoutMs() { return timeoutMs; }
     public MeterRegistry meterRegistry() { return meterRegistry; }
@@ -100,5 +159,10 @@ public final class WorkflowContext {
         if (Thread.currentThread().isInterrupted() || cancelled.getAsBoolean()) {
             throw new GenerationValidationException("AI 题目创作任务已取消");
         }
+    }
+
+    public void authorizeTool(String toolName) {
+        checkCancelled();
+        toolExecutionGuard.authorize(this, toolName);
     }
 }

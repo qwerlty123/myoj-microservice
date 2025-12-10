@@ -130,6 +130,10 @@ create table if not exists ai_problem_generation_task
     requestKey     char(64)                                 not null comment '用户幂等键哈希',
     userId         bigint                                   not null comment '管理员用户 id',
     mode           varchar(32)                              not null comment 'PROBLEM_DRAFT / TEST_CASES / QUALITY_REVIEW',
+    lane           varchar(32)    default 'PUBLIC_AUTHORING' not null,
+    sourceTaskId   bigint                                   null,
+    submissionId   bigint                                   null,
+    traceId        varchar(64)                              null,
     status         tinyint        default 0                 not null comment '0待执行 1执行中 2待审核 3失败 4超时 5取消',
     stage          varchar(64)    default 'QUEUED'          not null,
     progress       tinyint unsigned default 0               not null,
@@ -141,6 +145,11 @@ create table if not exists ai_problem_generation_task
     promptVersion  varchar(64)                               not null,
     inputTokens    int unsigned    default 0                 not null,
     outputTokens   int unsigned    default 0                 not null,
+    quotaCost      smallint unsigned default 0               not null,
+    quotaDate      date                                      null,
+    quotaStatus    varchar(16)     default 'RESERVED'        not null,
+    estimatedCostMicros bigint unsigned default 0            not null,
+    modelCallCount int unsigned    default 0                 not null,
     latencyMs      bigint unsigned default 0                 not null,
     attemptCount   smallint unsigned default 0               not null,
     cancelRequested tinyint       default 0                 not null,
@@ -148,13 +157,45 @@ create table if not exists ai_problem_generation_task
     finishedTime   datetime                                  null,
     errorCode      varchar(64)                               null,
     lastError      varchar(512)                              null,
+    failureStage   varchar(64)                               null,
+    degraded       tinyint         default 0                 not null,
+    nextAttemptTime datetime                                 null,
+    payloadPurgedTime datetime                               null,
     createTime     datetime        default CURRENT_TIMESTAMP not null,
     updateTime     datetime        default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP,
     version        int unsigned    default 0                 not null,
-    unique index uk_generation_requestKey (requestKey),
+    unique index uk_generation_user_request (userId, requestKey),
     index idx_generation_user_time (userId, createTime),
-    index idx_generation_status_time (status, updateTime)
+    index idx_generation_status_time (status, updateTime),
+    index idx_generation_lane_schedule (status, lane, nextAttemptTime, createTime),
+    index idx_generation_user_status_type (userId, status, mode)
 ) comment 'AI 题目生成任务' collate = utf8mb4_unicode_ci;
+
+create table if not exists ai_question_review_submission
+(
+    id                    bigint                                   not null primary key,
+    userId                bigint                                   not null,
+    parentSubmissionId    bigint                                   null,
+    version               int unsigned   default 1                 not null,
+    status                varchar(16)    default 'PENDING'         not null,
+    snapshotJson          json                                     not null,
+    executionHash         char(64)                                 not null,
+    problemDraftTaskId    bigint                                   not null,
+    testCasesTaskId       bigint                                   not null,
+    qualityReviewTaskId   bigint                                   null,
+    reviewerId            bigint                                   null,
+    reviewReason          varchar(1000)                             null,
+    publishedQuestionId   bigint                                   null,
+    reviewTime            datetime                                  null,
+    createTime            datetime        default CURRENT_TIMESTAMP not null,
+    updateTime            datetime        default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP,
+    lockVersion           int unsigned    default 0                 not null,
+    index idx_ai_review_test_task (testCasesTaskId),
+    unique index uk_ai_review_parent_version (parentSubmissionId, version),
+    index idx_ai_review_user_time (userId, createTime),
+    index idx_ai_review_status_time (status, createTime),
+    index idx_ai_review_quality_task (qualityReviewTaskId)
+) comment 'AI 题目人工审核版本' collate = utf8mb4_unicode_ci;
 
 -- 评论表（与 Comment 实体一致）
 create table if not exists comment

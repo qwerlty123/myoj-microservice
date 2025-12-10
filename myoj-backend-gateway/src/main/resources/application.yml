@@ -43,6 +43,8 @@ spring:
     web-application-type: reactive
 server:
   port: 8101
+security:
+  gateway-token: ${GATEWAY_TRUST_TOKEN:change-me-gateway-token}
 knife4j:
   gateway:
     # ① 第一个配置，开启gateway聚合组件

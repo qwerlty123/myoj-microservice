@@ -53,7 +53,7 @@ public class TestCaseAgentTools {
     public CandidateEvaluationResult evaluateCandidateCases(
             @ToolParam(description = "候选输入列表，不得包含期望输出，最多10项；每项的input与chunks必须二选一")
             List<CandidateTestInput> candidates) {
-        context.checkCancelled();
+        context.authorizeTool("evaluateCandidateCases");
         if (state.getRounds() >= MAX_ROUNDS) {
             throw new GenerationValidationException("测试用例 Agent 已达到 8 轮工具调用上限");
         }

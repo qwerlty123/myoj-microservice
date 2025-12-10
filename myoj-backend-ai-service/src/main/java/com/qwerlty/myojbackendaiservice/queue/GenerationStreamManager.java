@@ -21,29 +21,43 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import com.qwerlty.myojbackendaiservice.model.enums.GenerationLane;
 
 @Slf4j
 @Component
 public class GenerationStreamManager {
     private final StringRedisTemplate redisTemplate;
-    private final String streamKey;
-    private final String group;
+    private final String publicStreamKey;
+    private final String reviewStreamKey;
+    private final String publicGroup;
+    private final String reviewGroup;
     private final long maxLength;
 
     public GenerationStreamManager(
             StringRedisTemplate redisTemplate,
-            @Value("${myoj.ai.generation.stream.key:myoj:ai:generation:stream}") String streamKey,
-            @Value("${myoj.ai.generation.stream.group:myoj-ai-generation}") String group,
+            @Value("${myoj.ai.generation.stream.public-key:${myoj.ai.generation.stream.key:myoj:ai:generation:public}}") String publicStreamKey,
+            @Value("${myoj.ai.generation.stream.review-key:myoj:ai:generation:review}") String reviewStreamKey,
+            @Value("${myoj.ai.generation.stream.public-group:${myoj.ai.generation.stream.group:myoj-ai-generation-public}}") String publicGroup,
+            @Value("${myoj.ai.generation.stream.review-group:myoj-ai-generation-review}") String reviewGroup,
             @Value("${myoj.ai.generation.stream.max-length:5000}") long maxLength) {
         this.redisTemplate = redisTemplate;
-        this.streamKey = streamKey;
-        this.group = group;
+        this.publicStreamKey = publicStreamKey;
+        this.reviewStreamKey = reviewStreamKey;
+        this.publicGroup = publicGroup;
+        this.reviewGroup = reviewGroup;
         this.maxLength = maxLength;
     }
 
     @PostConstruct
     @Scheduled(fixedDelayString = "${myoj.ai.generation.stream.ensure-group-interval-ms:30000}")
     public void ensureGroup() {
+        ensureGroup(GenerationLane.PUBLIC_AUTHORING);
+        ensureGroup(GenerationLane.ADMIN_REVIEW);
+    }
+
+    private void ensureGroup(GenerationLane lane) {
+        String streamKey = getStreamKey(lane);
+        String group = getGroup(lane);
         try {
             byte[] key = streamKey.getBytes(StandardCharsets.UTF_8);
             redisTemplate.execute((RedisCallback<String>) connection ->
@@ -58,8 +72,14 @@ public class GenerationStreamManager {
     }
 
     public RecordId enqueue(Long taskId) {
+        return enqueue(taskId, GenerationLane.PUBLIC_AUTHORING);
+    }
+
+    public RecordId enqueue(Long taskId, GenerationLane lane) {
+        String streamKey = getStreamKey(lane);
+        String group = getGroup(lane);
         MapRecord<String, String, String> record = MapRecord.create(
-                streamKey, Map.of("taskId", String.valueOf(taskId)));
+                streamKey, Map.of("taskId", String.valueOf(taskId), "lane", lane.name()));
         RecordId id = operations().add(record,
                 RedisStreamCommands.XAddOptions.maxlen(maxLength).approximateTrimming(true));
         if (id == null) {
@@ -71,6 +91,12 @@ public class GenerationStreamManager {
     }
 
     public void acknowledgeAndDelete(RecordId id) {
+        acknowledgeAndDelete(GenerationLane.PUBLIC_AUTHORING, id);
+    }
+
+    public void acknowledgeAndDelete(GenerationLane lane, RecordId id) {
+        String streamKey = getStreamKey(lane);
+        String group = getGroup(lane);
         operations().acknowledge(streamKey, group, id);
         operations().delete(streamKey, id);
         log.debug("[AI_GENERATION] stream record acknowledged recordId={} stream={} group={}",
@@ -79,6 +105,13 @@ public class GenerationStreamManager {
 
     public List<MapRecord<String, String, String>> claimStale(
             String consumerName, Duration minIdleTime, int count) {
+        return claimStale(GenerationLane.PUBLIC_AUTHORING, consumerName, minIdleTime, count);
+    }
+
+    public List<MapRecord<String, String, String>> claimStale(
+            GenerationLane lane, String consumerName, Duration minIdleTime, int count) {
+        String streamKey = getStreamKey(lane);
+        String group = getGroup(lane);
         PendingMessages pending = operations().pending(streamKey, group, Range.unbounded(), count);
         if (pending == null || pending.isEmpty()) {
             return List.of();
@@ -96,11 +129,29 @@ public class GenerationStreamManager {
     }
 
     public String getStreamKey() {
-        return streamKey;
+        return publicStreamKey;
     }
 
     public String getGroup() {
-        return group;
+        return publicGroup;
+    }
+
+    public String getStreamKey(GenerationLane lane) {
+        return lane == GenerationLane.ADMIN_REVIEW ? reviewStreamKey : publicStreamKey;
+    }
+
+    public String getGroup(GenerationLane lane) {
+        return lane == GenerationLane.ADMIN_REVIEW ? reviewGroup : publicGroup;
+    }
+
+    public long streamLength(GenerationLane lane) {
+        Long size = operations().size(getStreamKey(lane));
+        return size == null ? 0L : size;
+    }
+
+    public long pendingCount(GenerationLane lane) {
+        var summary = operations().pending(getStreamKey(lane), getGroup(lane));
+        return summary == null ? 0L : summary.getTotalPendingMessages();
     }
 
     private boolean isBusyGroup(Throwable throwable) {

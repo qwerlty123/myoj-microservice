@@ -10,6 +10,12 @@ import com.qwerlty.myojbackendaiservice.model.dto.generation.ValidationPrograms;
 import com.qwerlty.myojbackendaiservice.sandbox.CodeSandboxClient;
 import com.qwerlty.myojbackendaiservice.sandbox.SandboxExecuteResponse;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import com.qwerlty.myojbackendaiservice.manager.DistributedLeaseManager;
+import com.qwerlty.myojbackendaiservice.generation.AiCallContext;
+import com.qwerlty.myojbackendaiservice.model.enums.GenerationLane;
+import org.springframework.web.client.ResourceAccessException;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -18,13 +24,32 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.time.Duration;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Component
 public class SandboxBatchVerifier {
     private final CodeSandboxClient sandboxClient;
+    private final DistributedLeaseManager leases;
+    private final int publicConcurrency;
+    private final int reviewConcurrency;
+    private final AtomicInteger consecutiveFailures = new AtomicInteger();
+    private final AtomicLong openUntil = new AtomicLong();
 
     public SandboxBatchVerifier(CodeSandboxClient sandboxClient) {
+        this(sandboxClient, null, Integer.MAX_VALUE, Integer.MAX_VALUE);
+    }
+
+    @Autowired
+    public SandboxBatchVerifier(CodeSandboxClient sandboxClient,
+                                DistributedLeaseManager leases,
+                                @Value("${myoj.ai.generation.sandbox-concurrency.public:2}") int publicConcurrency,
+                                @Value("${myoj.ai.generation.sandbox-concurrency.review:1}") int reviewConcurrency) {
         this.sandboxClient = sandboxClient;
+        this.leases = leases;
+        this.publicConcurrency = Math.max(1, publicConcurrency);
+        this.reviewConcurrency = Math.max(1, reviewConcurrency);
     }
 
     public BatchVerificationResult verify(List<CandidateTestInput> candidates,
@@ -119,13 +144,30 @@ public class SandboxBatchVerifier {
                                            String code,
                                            List<String> inputs,
                                            JudgeConfigValue config) {
-        SandboxExecuteResponse response = sandboxClient.execute(language, code, inputs,
-                config.getTimeLimit(), config.getMemoryLimit(), config.getStackLimit());
-        if (response == null || !Integer.valueOf(1).equals(response.getStatus())
-                || response.getOutputList() == null || response.getOutputList().size() != inputs.size()) {
-            throw new GenerationValidationException(failureSummary(phase, response, inputs.size()));
+        if (System.currentTimeMillis() < openUntil.get()) {
+            throw new ResourceAccessException("代码沙箱熔断中");
         }
-        return response;
+        AiCallContext.Value callContext = AiCallContext.current();
+        GenerationLane lane = callContext == null ? GenerationLane.PUBLIC_AUTHORING : callContext.lane();
+        int limit = lane == GenerationLane.ADMIN_REVIEW ? reviewConcurrency : publicConcurrency;
+        try (DistributedLeaseManager.Lease ignored = leases == null ? null : leases.acquire(
+                "sandbox:" + lane.name(), limit, Duration.ofSeconds(150))) {
+            SandboxExecuteResponse response = sandboxClient.execute(language, code, inputs,
+                    config.getTimeLimit(), config.getMemoryLimit(), config.getStackLimit());
+            consecutiveFailures.set(0);
+            if (response == null || !Integer.valueOf(1).equals(response.getStatus())
+                    || response.getOutputList() == null || response.getOutputList().size() != inputs.size()) {
+                throw new GenerationValidationException(failureSummary(phase, response, inputs.size()));
+            }
+            return response;
+        } catch (GenerationValidationException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            if (consecutiveFailures.incrementAndGet() >= 5) {
+                openUntil.set(System.currentTimeMillis() + 30_000L);
+            }
+            throw exception;
+        }
     }
 
     private String failureSummary(String phase, SandboxExecuteResponse response, int expectedOutputs) {
@@ -161,5 +203,9 @@ public class SandboxBatchVerifier {
         } catch (Exception exception) {
             throw new IllegalStateException("无法计算输入摘要", exception);
         }
+    }
+
+    public boolean isCircuitOpen() {
+        return System.currentTimeMillis() < openUntil.get();
     }
 }

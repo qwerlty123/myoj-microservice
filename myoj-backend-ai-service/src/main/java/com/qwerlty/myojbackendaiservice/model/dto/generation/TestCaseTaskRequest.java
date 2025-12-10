@@ -10,6 +10,8 @@ import lombok.Data;
 
 @Data
 public class TestCaseTaskRequest implements AuthoringRequest {
+    @NotNull
+    private Long sourceTaskId;
     @Valid @NotNull
     private ProblemSourceDraft sourceDraft;
     @Min(10) @Max(50) @NotNull

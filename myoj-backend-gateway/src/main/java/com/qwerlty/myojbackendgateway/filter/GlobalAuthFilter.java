@@ -12,6 +12,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.util.AntPathMatcher;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
@@ -44,6 +45,9 @@ public class GlobalAuthFilter implements GlobalFilter, Ordered {
     @Resource
     private StringRedisTemplate stringRedisTemplate;
 
+    @Value("${security.gateway-token:}")
+    private String gatewayToken;
+
     /**
      * 判断是否为白名单路径
      * @param path 请求路径
@@ -62,8 +66,18 @@ public class GlobalAuthFilter implements GlobalFilter, Ordered {
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
         ServerHttpRequest request = exchange.getRequest();
         String path = request.getURI().getPath();
+        // No caller-provided identity or service credential may cross the gateway, including
+        // requests to public allow-listed endpoints.
+        request = request.mutate().headers(headers -> {
+            headers.remove("X-user-Id");
+            headers.remove("X-user-Role");
+            headers.remove("X-Gateway-Token");
+            headers.remove("X-Internal-Service-Token");
+        }).build();
+        exchange = exchange.mutate().request(request).build();
         //判断路径中是否包含 inner，只运行内部调用
-        if (antPathMatcher.match("/**/inner/**", path)) {
+        if (antPathMatcher.match("/**/inner/**", path)
+                || antPathMatcher.match("/**/internal/**", path)) {
             return writeError(exchange.getResponse(), "无权限");
         }
         //公开接口（如登录注册）放行
@@ -90,11 +104,11 @@ public class GlobalAuthFilter implements GlobalFilter, Ordered {
             ServerHttpRequest newRequest = request.mutate()
                     .headers(headers -> {
                         // 客户端身份头不可信，必须先移除再写入 JWT 中的可信身份。
-                        headers.remove("X-user-Id");
-                        headers.remove("X-user-Role");
-                        headers.remove("X-Gateway-Token");
                         headers.set("X-user-Id", userId.toString());
                         headers.set("X-user-Role", userRole);
+                        if (StringUtils.isNotBlank(gatewayToken)) {
+                            headers.set("X-Gateway-Token", gatewayToken);
+                        }
                     })
                     .build();
             return chain.filter(exchange.mutate().request(newRequest).build());

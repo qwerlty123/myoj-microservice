@@ -12,6 +12,7 @@ import com.qwerlty.myojbackendaiservice.model.dto.generation.CandidateRejection;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CoveragePlan;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.GeneratedProblemSpec;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.ValidationPrograms;
+import com.qwerlty.myojbackendaiservice.model.enums.AuthoringTaskType;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
@@ -22,6 +23,7 @@ import org.springframework.ai.chat.prompt.Prompt;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -35,8 +37,11 @@ class SpringAiAuthoringAgentModelTest {
     @Test
     void toolCallAdvisorExecutesModelToolResultModelLoop() {
         ScriptedToolCallingModel chatModel = new ScriptedToolCallingModel();
+        AiModelGateway gateway = mock(AiModelGateway.class);
+        when(gateway.callWithUsage(any(), any(), any())).thenAnswer(invocation ->
+                ((AiModelGateway.ModelCallResult<?>) ((Supplier<?>) invocation.getArgument(2)).get()).value());
         SpringAiAuthoringAgentModel agent = new SpringAiAuthoringAgentModel(
-                new SpringAiConfig().authoringAgentChatClient(chatModel), new ObjectMapper());
+                new SpringAiConfig().authoringAgentChatClient(chatModel), new ObjectMapper(), gateway);
         SandboxBatchVerifier verifier = mock(SandboxBatchVerifier.class);
         when(verifier.verify(anyList(), anyList(), any(ValidationPrograms.class), any()))
                 .thenReturn(new BatchVerificationResult(List.of(),
@@ -46,7 +51,7 @@ class SpringAiAuthoringAgentModelTest {
         state.setCoveragePlan(new CoveragePlan());
         state.setPrograms(new ValidationPrograms());
         TestCaseAgentTools tools = new TestCaseAgentTools(
-                WorkflowContext.testing(99L), verifier, state, 10);
+                WorkflowContext.testing(99L, AuthoringTaskType.TEST_CASES), verifier, state, 10);
 
         agent.generateTestCases(new TestCaseAgentPrompt(
                 state.getSpecification(), state.getCoveragePlan(), 10, "边界"), tools);

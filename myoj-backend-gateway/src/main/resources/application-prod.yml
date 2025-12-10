@@ -10,3 +10,6 @@ spring:
     host: ${REDIS_HOST:124.221.250.220}
     port: ${REDIS_PORT:6379}
     password: ${REDIS_PASSWORD:adgjl08642}
+
+security:
+  gateway-token: ${GATEWAY_TRUST_TOKEN}

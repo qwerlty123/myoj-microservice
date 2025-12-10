@@ -6,6 +6,7 @@ import com.qwerlty.myojbackendaiservice.model.dto.generation.CandidateTestInput;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CaseEvidence;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.GeneratedProblemSpec;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.ValidationPrograms;
+import com.qwerlty.myojbackendaiservice.model.enums.AuthoringTaskType;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -35,7 +36,7 @@ class AuthoringToolLimitsTest {
         TestCaseGenerationState state = new TestCaseGenerationState();
         state.setSpecification(new GeneratedProblemSpec());
         state.setPrograms(new ValidationPrograms());
-        TestCaseAgentTools tools = new TestCaseAgentTools(WorkflowContext.testing(1L), verifier, state, 10);
+        TestCaseAgentTools tools = new TestCaseAgentTools(testCaseContext(), verifier, state, 10);
 
         CandidateTestInput candidate = new CandidateTestInput();
         candidate.setCategory("MAXIMUM");
@@ -63,7 +64,7 @@ class AuthoringToolLimitsTest {
         TestCaseGenerationState state = new TestCaseGenerationState();
         state.setSpecification(new GeneratedProblemSpec());
         state.setPrograms(new ValidationPrograms());
-        TestCaseAgentTools tools = new TestCaseAgentTools(WorkflowContext.testing(1L), verifier, state, 10);
+        TestCaseAgentTools tools = new TestCaseAgentTools(testCaseContext(), verifier, state, 10);
         CandidateInputChunk repeated = new CandidateInputChunk();
         repeated.setType("REPEAT");
         repeated.setValue("x".repeat(2048));
@@ -92,7 +93,7 @@ class AuthoringToolLimitsTest {
             state.getAcceptedCases().add(new AcceptedCaseState(
                     candidate("normal-" + index), "output", new CaseEvidence()));
         }
-        TestCaseAgentTools tools = new TestCaseAgentTools(WorkflowContext.testing(1L), verifier, state, 10);
+        TestCaseAgentTools tools = new TestCaseAgentTools(testCaseContext(), verifier, state, 10);
 
         int removed = tools.reopenSlotsForMissingCategories();
 
@@ -115,7 +116,7 @@ class AuthoringToolLimitsTest {
         TestCaseGenerationState state = new TestCaseGenerationState();
         state.setSpecification(new GeneratedProblemSpec());
         state.setPrograms(new ValidationPrograms());
-        TestCaseAgentTools tools = new TestCaseAgentTools(WorkflowContext.testing(1L), verifier, state, 10);
+        TestCaseAgentTools tools = new TestCaseAgentTools(testCaseContext(), verifier, state, 10);
         CandidateTestInput candidate = candidate("unknown-category");
         candidate.setCategory("边界");
 
@@ -137,7 +138,7 @@ class AuthoringToolLimitsTest {
         TestCaseGenerationState state = new TestCaseGenerationState();
         state.setSpecification(new GeneratedProblemSpec());
         state.setPrograms(new ValidationPrograms());
-        WorkflowContext context = WorkflowContext.testing(1L);
+        WorkflowContext context = testCaseContext();
         TestCaseAgentTools tools = new TestCaseAgentTools(context, verifier, state, 10);
 
         assertThatThrownBy(() -> tools.evaluateCandidateCases(List.of(candidate("sandbox-error"))))
@@ -161,7 +162,7 @@ class AuthoringToolLimitsTest {
         TestCaseGenerationState state = new TestCaseGenerationState();
         state.setSpecification(new GeneratedProblemSpec());
         state.setPrograms(new ValidationPrograms());
-        TestCaseAgentTools tools = new TestCaseAgentTools(WorkflowContext.testing(1L), verifier, state, 50);
+        TestCaseAgentTools tools = new TestCaseAgentTools(testCaseContext(), verifier, state, 50);
 
         assertThatThrownBy(() -> tools.evaluateCandidateCases(java.util.stream.IntStream.range(0, 11)
                 .mapToObj(index -> candidate("batch-" + index)).toList()))
@@ -198,5 +199,9 @@ class AuthoringToolLimitsTest {
         candidate.setCategory("NORMAL");
         candidate.setOracleEligible(true);
         return candidate;
+    }
+
+    private WorkflowContext testCaseContext() {
+        return WorkflowContext.testing(1L, AuthoringTaskType.TEST_CASES);
     }
 }

@@ -11,6 +11,7 @@ import com.qwerlty.myojbackendaiservice.model.dto.generation.QualityModelReview;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.QualityReviewTaskRequest;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.ReferenceSolution;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.ValidationPrograms;
+import com.qwerlty.myojbackendaiservice.model.enums.AuthoringTaskType;
 import com.qwerlty.myojbackendaiservice.sandbox.CodeSandboxClient;
 import com.qwerlty.myojbackendaiservice.sandbox.SandboxExecuteResponse;
 import org.junit.jupiter.api.Test;
@@ -41,7 +42,7 @@ class QuestionQualityWorkflowTest {
         QualityReviewTaskRequest request = new QualityReviewTaskRequest();
         request.setSourceDraft(source);
 
-        var artifact = workflow.execute(WorkflowContext.testing(3L), request);
+        var artifact = workflow.execute(WorkflowContext.testing(3L, AuthoringTaskType.QUALITY_REVIEW), request);
 
         assertThat(artifact.getReport().isComplete()).isFalse();
         assertThat(artifact.getReport().getTotalScore()).isNull();
@@ -92,7 +93,7 @@ class QuestionQualityWorkflowTest {
         QuestionQualityWorkflow workflow = new QuestionQualityWorkflow(structured, agent,
                 new SandboxBatchVerifier(sandbox), new ObjectMapper());
 
-        var artifact = workflow.execute(WorkflowContext.testing(4L), completeRequest());
+        var artifact = workflow.execute(WorkflowContext.testing(4L, AuthoringTaskType.QUALITY_REVIEW), completeRequest());
 
         assertThat(artifact.getReport().isComplete()).isTrue();
         assertThat(artifact.getReport().getTotalScore()).isNotNull().isLessThan(100);
@@ -146,7 +147,7 @@ class QuestionQualityWorkflowTest {
                 new GeneratedJudgeCase("1", "correct", "NORMAL"),
                 new GeneratedJudgeCase("x".repeat(900_000), "correct", "MAXIMUM")));
 
-        var artifact = workflow.execute(WorkflowContext.testing(5L), request);
+        var artifact = workflow.execute(WorkflowContext.testing(5L, AuthoringTaskType.QUALITY_REVIEW), request);
 
         assertThat(oracleInputs.get()).containsExactly("1");
         assertThat(artifact.getReport().getVerification().getVerifiedCases()).isEqualTo(2);

@@ -56,7 +56,7 @@ class TestCaseGenerationWorkflowTest {
                 throw new UnsupportedOperationException();
             }
         };
-        var artifact = workflow(agent).execute(WorkflowContext.testing(2L), request());
+        var artifact = workflow(agent).execute(WorkflowContext.testing(2L, AuthoringTaskType.TEST_CASES), request());
 
         assertThat(artifact.getJudgeCases()).hasSize(10);
         assertThat(artifact.getCoverage().getRejectedCount()).isEqualTo(1);
@@ -94,7 +94,7 @@ class TestCaseGenerationWorkflowTest {
             }
         };
 
-        var artifact = workflow(agent).execute(WorkflowContext.testing(3L), request());
+        var artifact = workflow(agent).execute(WorkflowContext.testing(3L, AuthoringTaskType.TEST_CASES), request());
 
         assertThat(artifact.getJudgeCases()).hasSize(10);
         assertThat(artifact.getJudgeCases()).extracting("category")
@@ -188,7 +188,7 @@ class TestCaseGenerationWorkflowTest {
             }
         };
 
-        var artifact = workflow(agent).execute(WorkflowContext.testing(5L), request());
+        var artifact = workflow(agent).execute(WorkflowContext.testing(5L, AuthoringTaskType.TEST_CASES), request());
 
         assertThat(invocations[0]).isEqualTo(2);
         assertThat(artifact.getJudgeCases()).hasSize(10);

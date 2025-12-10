@@ -28,3 +28,9 @@ file:
 codesandbox:
   url: ${CODESANDBOX_URL:http://127.0.0.1:8090/executeCode}
   secretKey: ${CODESANDBOX_SECRET_KEY:adgjl08642}
+
+# StdOutImpl writes every SQL statement synchronously and materially reduces
+# throughput under load. Keep SQL logging opt-in outside production.
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl

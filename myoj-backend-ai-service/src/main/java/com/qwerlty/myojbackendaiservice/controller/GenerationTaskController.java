@@ -10,11 +10,13 @@ import com.qwerlty.myojbackendaiservice.model.dto.generation.TestCaseTaskRequest
 import com.qwerlty.myojbackendaiservice.model.enums.AuthoringTaskType;
 import com.qwerlty.myojbackendaiservice.model.vo.GenerationTaskPageVO;
 import com.qwerlty.myojbackendaiservice.model.vo.GenerationTaskVO;
+import com.qwerlty.myojbackendaiservice.model.vo.GenerationQuotaVO;
 import com.qwerlty.myojbackendaiservice.service.GenerationTaskService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Positive;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -30,9 +32,12 @@ import org.springframework.web.bind.annotation.RestController;
 @Slf4j
 public class GenerationTaskController {
     private final GenerationTaskService taskService;
+    private final boolean publicEnabled;
 
-    public GenerationTaskController(GenerationTaskService taskService) {
+    public GenerationTaskController(GenerationTaskService taskService,
+                                    @Value("${myoj.ai.generation.public-enabled:false}") boolean publicEnabled) {
         this.taskService = taskService;
+        this.publicEnabled = publicEnabled;
     }
 
     @PostMapping("/problem-drafts")
@@ -67,8 +72,8 @@ public class GenerationTaskController {
             @PathVariable @Positive Long taskId,
             @RequestHeader("X-user-Id") String userId,
             @RequestHeader("X-user-Role") String role) {
-        requireAdmin(role);
-        GenerationTaskVO task = taskService.get(taskId, parseUserId(userId));
+        requireUser(role);
+        GenerationTaskVO task = taskService.get(taskId, parseUserId(userId), role);
         log.debug("[AI_GENERATION] task polled taskId={} status={} stage={} progress={}",
                 taskId, task.getStatus(), task.getStage(), task.getProgress());
         return ResultUtils.success(task);
@@ -81,9 +86,12 @@ public class GenerationTaskController {
             @RequestParam(required = false) String type,
             @RequestHeader("X-user-Id") String userId,
             @RequestHeader("X-user-Role") String role) {
-        requireAdmin(role);
+        requireUser(role);
         AuthoringTaskType taskType = type == null || type.isBlank() ? null : parseType(type);
-        return ResultUtils.success(taskService.history(parseUserId(userId), current, pageSize, taskType));
+        if (!"admin".equals(role) && taskType == AuthoringTaskType.QUALITY_REVIEW) {
+            throw new BusinessException(ErrorCode.NO_AUTH_ERROR);
+        }
+        return ResultUtils.success(taskService.history(parseUserId(userId), role, current, pageSize, taskType));
     }
 
     @PostMapping("/{taskId}/retry")
@@ -101,7 +109,7 @@ public class GenerationTaskController {
             @PathVariable @Positive Long taskId,
             @RequestHeader("X-user-Id") String userId,
             @RequestHeader("X-user-Role") String role) {
-        requireAdmin(role);
+        requireUser(role);
         log.info("[AI_GENERATION] cancel request received taskId={}", taskId);
         return ResultUtils.success(taskService.cancel(taskId, parseUserId(userId)));
     }
@@ -112,15 +120,35 @@ public class GenerationTaskController {
         }
     }
 
+    private void requireUser(String role) {
+        if (!"admin".equals(role) && !"user".equals(role)) {
+            throw new BusinessException(ErrorCode.NO_AUTH_ERROR);
+        }
+    }
+
+    @GetMapping("/quota")
+    public BaseResponse<GenerationQuotaVO> quota(
+            @RequestHeader("X-user-Id") String userId,
+            @RequestHeader("X-user-Role") String role) {
+        requireUser(role);
+        return ResultUtils.success(taskService.quota(parseUserId(userId), role));
+    }
+
     private BaseResponse<GenerationTaskVO> create(AuthoringTaskType type,
                                                    com.qwerlty.myojbackendaiservice.generation.workflow.AuthoringRequest request,
                                                    String idempotencyKey,
                                                    String userId,
                                                    String role) {
-        requireAdmin(role);
+        requireUser(role);
+        if (type != AuthoringTaskType.QUALITY_REVIEW && !"admin".equals(role) && !publicEnabled) {
+            throw new BusinessException(ErrorCode.FORBIDDEN_ERROR, "AI 题目创作尚未对外开放");
+        }
+        if (type == AuthoringTaskType.QUALITY_REVIEW) {
+            requireAdmin(role);
+        }
         Long parsedUserId = parseUserId(userId);
         log.info("[AI_GENERATION] create request received userId={} type={}", parsedUserId, type);
-        GenerationTaskVO task = taskService.create(type, request, parsedUserId, idempotencyKey);
+        GenerationTaskVO task = taskService.create(type, request, parsedUserId, role, idempotencyKey);
         return ResultUtils.success(task);
     }
 

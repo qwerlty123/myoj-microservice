@@ -15,6 +15,10 @@ public class AiProblemGenerationTask {
     private String requestKey;
     private Long userId;
     private String mode;
+    private String lane;
+    private Long sourceTaskId;
+    private Long submissionId;
+    private String traceId;
     private Integer status;
     private String stage;
     private Integer progress;
@@ -26,6 +30,11 @@ public class AiProblemGenerationTask {
     private String promptVersion;
     private Integer inputTokens;
     private Integer outputTokens;
+    private Integer quotaCost;
+    private Date quotaDate;
+    private String quotaStatus;
+    private Long estimatedCostMicros;
+    private Integer modelCallCount;
     private Long latencyMs;
     private Integer attemptCount;
     private Integer cancelRequested;
@@ -33,6 +42,10 @@ public class AiProblemGenerationTask {
     private Date finishedTime;
     private String errorCode;
     private String lastError;
+    private String failureStage;
+    private Integer degraded;
+    private Date nextAttemptTime;
+    private Date payloadPurgedTime;
     private Date createTime;
     private Date updateTime;
     private Integer version;

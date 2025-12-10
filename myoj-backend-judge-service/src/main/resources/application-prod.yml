@@ -20,3 +20,12 @@ spring:
 codesandbox:
   url: ${CODESANDBOX_URL:http://127.0.0.1:8090/executeCode}
   secretKey: ${CODESANDBOX_SECRET_KEY}
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+
+logging:
+  level:
+    com.qwerlty.myojbackendjudgeservice.judge.mq.RabbitmqConsumer: WARN
+    com.qwerlty.myojbackendjudgeservice.judge.codesandbox.CodeSandboxProxy: WARN

@@ -2,7 +2,7 @@
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
   <hashTree>
     <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="MyOJ Judge Load Test" enabled="true">
-      <stringProp name="TestPlan.comments">Rate-limited end-to-end judge submission test. Start at 60 requests/minute.</stringProp>
+      <stringProp name="TestPlan.comments">Rate-limited judge submission test. JMeter measures acceptance latency; the runner derives end-to-end completion latency from tagged database rows.</stringProp>
       <boolProp name="TestPlan.functional_mode">false</boolProp><boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp><boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
       <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="Variables" enabled="true">
         <collectionProp name="Arguments.arguments">
@@ -10,6 +10,7 @@
           <elementProp name="host" elementType="Argument"><stringProp name="Argument.name">host</stringProp><stringProp name="Argument.value">${__P(host,localhost)}</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp>
           <elementProp name="port" elementType="Argument"><stringProp name="Argument.name">port</stringProp><stringProp name="Argument.value">${__P(port,8101)}</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp>
           <elementProp name="question_id" elementType="Argument"><stringProp name="Argument.name">question_id</stringProp><stringProp name="Argument.value">${__P(question_id,1)}</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp>
+          <elementProp name="run_id" elementType="Argument"><stringProp name="Argument.name">run_id</stringProp><stringProp name="Argument.value">${__P(run_id,manual)}</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp>
         </collectionProp>
       </elementProp>
       <stringProp name="TestPlan.user_define_classpath"></stringProp>
@@ -19,10 +20,6 @@
         <elementProp name="HTTPsampler.Arguments" elementType="Arguments"><collectionProp name="Arguments.arguments"/></elementProp>
         <stringProp name="HTTPSampler.domain">${host}</stringProp><stringProp name="HTTPSampler.port">${port}</stringProp><stringProp name="HTTPSampler.protocol">${scheme}</stringProp><stringProp name="HTTPSampler.connect_timeout">3000</stringProp><stringProp name="HTTPSampler.response_timeout">10000</stringProp><stringProp name="HTTPSampler.implementation">HttpClient4</stringProp>
       </ConfigTestElement>
-      <hashTree/>
-      <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="Load Test Accounts" enabled="true">
-        <stringProp name="delimiter">,</stringProp><stringProp name="fileEncoding">UTF-8</stringProp><stringProp name="filename">${__P(accounts,accounts.csv)}</stringProp><boolProp name="ignoreFirstLine">true</boolProp><boolProp name="quotedData">false</boolProp><boolProp name="recycle">true</boolProp><stringProp name="shareMode">shareMode.all</stringProp><boolProp name="stopThread">false</boolProp><stringProp name="variableNames">username,password</stringProp>
-      </CSVDataSet>
       <hashTree/>
       <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Judge Submission Flow" enabled="true">
         <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
@@ -36,14 +33,46 @@
         <hashTree/>
         <OnceOnlyController guiclass="OnceOnlyControllerGui" testclass="OnceOnlyController" testname="Login Once Per User" enabled="true"/>
         <hashTree>
+          <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="00 Pin One Account To Thread" enabled="true">
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="filename"></stringProp>
+            <stringProp name="parameters"></stringProp>
+            <stringProp name="script"><![CDATA[def rows = new File(props.get('accounts')).readLines('UTF-8')
+def rowIndex = ctx.getThreadNum() + 1
+if (rowIndex >= rows.size()) {
+    throw new IllegalStateException("Not enough load-test accounts for thread ${ctx.getThreadNum()}")
+}
+def columns = rows[rowIndex].split(',', -1)
+if (columns.length < 2 || !columns[0] || !columns[1]) {
+    throw new IllegalStateException("Invalid account row ${rowIndex + 1}")
+}
+vars.put('username', columns[0])
+vars.put('password', columns[1])]]></stringProp>
+            <stringProp name="scriptLanguage">groovy</stringProp>
+          </JSR223Sampler>
+          <hashTree/>
           <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="01 Login" enabled="true">
             <elementProp name="HTTPsampler.Arguments" elementType="Arguments"><collectionProp name="Arguments.arguments"><elementProp name="" elementType="HTTPArgument"><boolProp name="HTTPArgument.always_encode">false</boolProp><stringProp name="Argument.value">{&quot;userAccount&quot;:&quot;${username}&quot;,&quot;userPassword&quot;:&quot;${password}&quot;}</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp></collectionProp></elementProp>
             <stringProp name="HTTPSampler.path">/api/user/login</stringProp><stringProp name="HTTPSampler.method">POST</stringProp><boolProp name="HTTPSampler.follow_redirects">true</boolProp><boolProp name="HTTPSampler.use_keepalive">true</boolProp><boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
           </HTTPSamplerProxy>
-          <hashTree><JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="Extract JWT" enabled="true"><stringProp name="JSONPostProcessor.referenceNames">token</stringProp><stringProp name="JSONPostProcessor.jsonPathExprs">$.data.token</stringProp><stringProp name="JSONPostProcessor.match_numbers">1</stringProp><stringProp name="JSONPostProcessor.defaultValues">TOKEN_NOT_FOUND</stringProp></JSONPostProcessor><hashTree/></hashTree>
+          <hashTree>
+            <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="Extract JWT" enabled="true"><stringProp name="JSONPostProcessor.referenceNames">token</stringProp><stringProp name="JSONPostProcessor.jsonPathExprs">$.data.token</stringProp><stringProp name="JSONPostProcessor.match_numbers">1</stringProp><stringProp name="JSONPostProcessor.defaultValues">TOKEN_NOT_FOUND</stringProp></JSONPostProcessor>
+            <hashTree/>
+            <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Login Succeeded" enabled="true"><collectionProp name="Asserion.test_strings"><stringProp name="success">&quot;code&quot;:0</stringProp></collectionProp><stringProp name="Assertion.custom_message">Expected login response code 0</stringProp><stringProp name="Assertion.test_field">Assertion.response_data</stringProp><boolProp name="Assertion.assume_success">false</boolProp><intProp name="Assertion.test_type">16</intProp></ResponseAssertion>
+            <hashTree/>
+            <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor" testname="Stop Thread Without JWT" enabled="true">
+              <stringProp name="cacheKey">true</stringProp><stringProp name="filename"></stringProp><stringProp name="parameters"></stringProp><stringProp name="script"><![CDATA[def token = vars.get('token')
+if (!token || token == 'TOKEN_NOT_FOUND') {
+    prev.setSuccessful(false)
+    prev.setResponseMessage('JWT extraction failed; stopping this thread')
+    prev.setStopThread(true)
+}]]></stringProp><stringProp name="scriptLanguage">groovy</stringProp>
+            </JSR223PostProcessor>
+            <hashTree/>
+          </hashTree>
         </hashTree>
         <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="10 Submit Java Code" enabled="true">
-          <elementProp name="HTTPsampler.Arguments" elementType="Arguments"><collectionProp name="Arguments.arguments"><elementProp name="" elementType="HTTPArgument"><boolProp name="HTTPArgument.always_encode">false</boolProp><stringProp name="Argument.value">{&quot;language&quot;:&quot;java&quot;,&quot;questionId&quot;:${question_id},&quot;code&quot;:&quot;public class Main { public static void main(String[] args) { System.out.println(1); } }&quot;}</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp></collectionProp></elementProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments"><collectionProp name="Arguments.arguments"><elementProp name="" elementType="HTTPArgument"><boolProp name="HTTPArgument.always_encode">false</boolProp><stringProp name="Argument.value">{&quot;language&quot;:&quot;java&quot;,&quot;questionId&quot;:${question_id},&quot;code&quot;:&quot;public class Main { /* LOAD_TEST_RUN_ID=${run_id} */ public static void main(String[] args) { System.out.println(1); } }&quot;}</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp></collectionProp></elementProp>
           <stringProp name="HTTPSampler.path">/api/question/question_submit/do</stringProp><stringProp name="HTTPSampler.method">POST</stringProp><boolProp name="HTTPSampler.follow_redirects">true</boolProp><boolProp name="HTTPSampler.use_keepalive">true</boolProp><boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
         </HTTPSamplerProxy>
         <hashTree>
@@ -52,6 +81,14 @@
           <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="Extract Submission ID" enabled="true"><stringProp name="JSONPostProcessor.referenceNames">submission_id</stringProp><stringProp name="JSONPostProcessor.jsonPathExprs">$.data</stringProp><stringProp name="JSONPostProcessor.match_numbers">1</stringProp><stringProp name="JSONPostProcessor.defaultValues">SUBMISSION_ID_NOT_FOUND</stringProp></JSONPostProcessor>
           <hashTree/>
           <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Submission Accepted" enabled="true"><collectionProp name="Asserion.test_strings"><stringProp name="success">&quot;code&quot;:0</stringProp></collectionProp><stringProp name="Assertion.custom_message">Expected submission response code 0</stringProp><stringProp name="Assertion.test_field">Assertion.response_data</stringProp><boolProp name="Assertion.assume_success">false</boolProp><intProp name="Assertion.test_type">16</intProp></ResponseAssertion>
+          <hashTree/>
+          <JSR223Assertion guiclass="TestBeanGUI" testclass="JSR223Assertion" testname="Submission ID Exists" enabled="true">
+            <stringProp name="cacheKey">true</stringProp><stringProp name="filename"></stringProp><stringProp name="parameters"></stringProp><stringProp name="script"><![CDATA[def submissionId = vars.get('submission_id')
+if (!submissionId || submissionId == 'SUBMISSION_ID_NOT_FOUND') {
+    AssertionResult.setFailure(true)
+    AssertionResult.setFailureMessage('Submission response did not contain an id')
+}]]></stringProp><stringProp name="scriptLanguage">groovy</stringProp>
+          </JSR223Assertion>
           <hashTree/>
         </hashTree>
       </hashTree>

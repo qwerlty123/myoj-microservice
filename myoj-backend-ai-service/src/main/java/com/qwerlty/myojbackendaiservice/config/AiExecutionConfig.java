@@ -38,9 +38,19 @@ public class AiExecutionConfig {
                 new ThreadPoolExecutor.AbortPolicy());
     }
 
-    @Bean(destroyMethod = "shutdown", name = "problemGenerationExecutor")
-    public ExecutorService problemGenerationExecutor(
-            @Value("${myoj.ai.generation.concurrency:2}") int concurrency) {
+    @Bean(destroyMethod = "shutdown", name = "problemGenerationPublicExecutor")
+    public ExecutorService problemGenerationPublicExecutor(
+            @Value("${myoj.ai.generation.public-concurrency:${myoj.ai.generation.concurrency:2}}") int concurrency) {
+        return generationExecutor(concurrency, "problem-generation-public-");
+    }
+
+    @Bean(destroyMethod = "shutdown", name = "problemGenerationReviewExecutor")
+    public ExecutorService problemGenerationReviewExecutor(
+            @Value("${myoj.ai.generation.review-concurrency:1}") int concurrency) {
+        return generationExecutor(concurrency, "problem-generation-review-");
+    }
+
+    private ExecutorService generationExecutor(int concurrency, String prefix) {
         int poolSize = Math.max(1, concurrency);
         return new ThreadPoolExecutor(
                 poolSize,
@@ -49,8 +59,8 @@ public class AiExecutionConfig {
                 TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(poolSize * 2),
                 runnable -> {
-                    Thread thread = new Thread(runnable, "problem-generation-worker");
-                    thread.setDaemon(true);
+                    Thread thread = new Thread(runnable, prefix + System.nanoTime());
+                    thread.setDaemon(false);
                     return thread;
                 },
                 new ThreadPoolExecutor.AbortPolicy());
@@ -70,12 +80,16 @@ public class AiExecutionConfig {
 
     @Bean(name = "generationStreamExecutor")
     public TaskExecutor generationStreamExecutor(
-            @Value("${myoj.ai.generation.concurrency:2}") int concurrency) {
+            @Value("${myoj.ai.generation.public-concurrency:${myoj.ai.generation.concurrency:2}}") int publicConcurrency,
+            @Value("${myoj.ai.generation.review-concurrency:1}") int reviewConcurrency) {
+        int concurrency = Math.max(1, publicConcurrency) + Math.max(1, reviewConcurrency);
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(Math.max(1, concurrency));
         executor.setMaxPoolSize(Math.max(1, concurrency));
         executor.setQueueCapacity(Math.max(2, concurrency * 2));
         executor.setThreadNamePrefix("generation-stream-worker-");
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(120);
         executor.initialize();
         return executor;
     }

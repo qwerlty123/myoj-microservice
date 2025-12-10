@@ -22,12 +22,15 @@ public class SpringAiAuthoringAgentModel implements AuthoringAgentModel {
 
     private final ChatClient chatClient;
     private final ObjectMapper objectMapper;
+    private final AiModelGateway modelGateway;
 
     public SpringAiAuthoringAgentModel(
             @Qualifier("authoringAgentChatClient") ChatClient chatClient,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            AiModelGateway modelGateway) {
         this.chatClient = chatClient;
         this.objectMapper = objectMapper;
+        this.modelGateway = modelGateway;
     }
 
     @Override
@@ -48,7 +51,12 @@ public class SpringAiAuthoringAgentModel implements AuthoringAgentModel {
                 <task>%s</task>
                 """.formatted(prompt.targetCount(), tools.categoryCounts(),
                 tools.missingRequiredCategories(), json(prompt));
-        chatClient.prompt().system(SYSTEM).user(user).tools(tools).call().content();
+        modelGateway.callWithUsage("test_case_agent_turn", user, () -> {
+            var response = chatClient.prompt().system(SYSTEM).user(user).tools(tools).call().chatResponse();
+            String content = response == null || response.getResult() == null
+                    ? null : response.getResult().getOutput().getText();
+            return AiModelGateway.ModelCallResult.from(response, content);
+        });
     }
 
     @Override
@@ -61,7 +69,12 @@ public class SpringAiAuthoringAgentModel implements AuthoringAgentModel {
                 不得建议新增测试输入。按以下结构输出：%s
                 <review>%s</review>
                 """.formatted(converter.getFormat(), json(prompt));
-        String content = chatClient.prompt().system(SYSTEM).user(user).tools(tools).call().content();
+        String content = modelGateway.callWithUsage("quality_agent_turn", user, () -> {
+            var response = chatClient.prompt().system(SYSTEM).user(user).tools(tools).call().chatResponse();
+            String value = response == null || response.getResult() == null
+                    ? null : response.getResult().getOutput().getText();
+            return AiModelGateway.ModelCallResult.from(response, value);
+        });
         QualityModelReview result = converter.convert(content);
         return result == null ? new QualityModelReview() : result;
     }

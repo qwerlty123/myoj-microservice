@@ -24,12 +24,15 @@ public class SpringAiProblemGenerationModel implements ProblemGenerationModel {
 
     private final ChatClient chatClient;
     private final ObjectMapper objectMapper;
+    private final AiModelGateway modelGateway;
 
     public SpringAiProblemGenerationModel(
             @Qualifier("authoringStructuredChatClient") ChatClient chatClient,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            AiModelGateway modelGateway) {
         this.chatClient = chatClient;
         this.objectMapper = objectMapper;
+        this.modelGateway = modelGateway;
     }
 
     @Override
@@ -42,9 +45,13 @@ public class SpringAiProblemGenerationModel implements ProblemGenerationModel {
                 solutionExplanation 给出正确算法、正确性说明和复杂度，不包含完整代码。
                 <requirements>%s</requirements>
                 """.formatted(json(requirements));
-        return required(chatClient.prompt().system(SYSTEM).user(prompt)
-                .options(OpenAiChatOptions.builder().temperature(0.45).build()).call()
-                .entity(GeneratedProblemSpec.class), "题目草稿规格");
+        return modelGateway.callWithUsage("draft_specification", prompt, () -> {
+            var response = chatClient.prompt().system(SYSTEM).user(prompt)
+                    .options(OpenAiChatOptions.builder().temperature(0.45).build()).call()
+                    .responseEntity(GeneratedProblemSpec.class);
+            return AiModelGateway.ModelCallResult.from(response.response(),
+                    required(response.entity(), "题目草稿规格"));
+        });
     }
 
     @Override
@@ -62,8 +69,12 @@ public class SpringAiProblemGenerationModel implements ProblemGenerationModel {
                 language 字段必须是 %s，code 必须是完整源码。
                 <problem>%s</problem>
                 """.formatted(languageRule, language, json(specification));
-        ReferenceSolution result = required(chatClient.prompt().system(SYSTEM).user(prompt).call()
-                .entity(ReferenceSolution.class), language + " 参考实现");
+        ReferenceSolution result = modelGateway.callWithUsage("reference_solution_" + language, prompt, () -> {
+            var response = chatClient.prompt().system(SYSTEM).user(prompt).call()
+                    .responseEntity(ReferenceSolution.class);
+            return AiModelGateway.ModelCallResult.from(response.response(),
+                    required(response.entity(), language + " 参考实现"));
+        });
         result.setLanguage(language);
         return result;
     }
@@ -77,8 +88,12 @@ public class SpringAiProblemGenerationModel implements ProblemGenerationModel {
                 两个程序都不得访问网络、文件、时间或随机数。
                 <problem>%s</problem>
                 """.formatted(json(specification));
-        return required(chatClient.prompt().system(SYSTEM).user(prompt).call()
-                .entity(ValidationPrograms.class), "验证程序");
+        return modelGateway.callWithUsage("validation_programs", prompt, () -> {
+            var response = chatClient.prompt().system(SYSTEM).user(prompt).call()
+                    .responseEntity(ValidationPrograms.class);
+            return AiModelGateway.ModelCallResult.from(response.response(),
+                    required(response.entity(), "验证程序"));
+        });
     }
 
     @Override
@@ -90,8 +105,12 @@ public class SpringAiProblemGenerationModel implements ProblemGenerationModel {
                 <problem>%s</problem>
                 <focus>%s</focus>
                 """.formatted(json(specification), constraints == null ? "" : constraints);
-        return required(chatClient.prompt().system(SYSTEM).user(prompt).call()
-                .entity(CoveragePlan.class), "动态覆盖计划");
+        return modelGateway.callWithUsage("coverage_plan", prompt, () -> {
+            var response = chatClient.prompt().system(SYSTEM).user(prompt).call()
+                    .responseEntity(CoveragePlan.class);
+            return AiModelGateway.ModelCallResult.from(response.response(),
+                    required(response.entity(), "动态覆盖计划"));
+        });
     }
 
     private <T> T required(T value, String name) {

@@ -24,6 +24,7 @@ public class QualityEvidenceTools {
     @Tool(description = "按用例下标获取校验器、Java、C++ 与 Oracle 的可信执行证据；每次最多五个下标。")
     public List<CaseEvidence> inspectCaseEvidence(
             @ToolParam(description = "需要复核的用例下标，最多5个") List<Integer> caseIndexes) {
+        if (context != null) context.authorizeTool("inspectCaseEvidence");
         if (calls >= 3) throw new IllegalStateException("质检 Agent 已达到 3 次取证上限");
         if (caseIndexes == null || caseIndexes.isEmpty() || caseIndexes.size() > 5) {
             throw new IllegalArgumentException("每次必须检查 1 到 5 个用例下标");

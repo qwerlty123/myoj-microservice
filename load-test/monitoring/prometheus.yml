@@ -36,8 +36,13 @@ scrape_configs:
   - job_name: myoj-codesandbox
     metrics_path: /actuator/prometheus
     static_configs:
-      - targets: ["host.docker.internal:8090"]
+      # Code Sandbox is deployed on the same remote server as the middleware.
+      - targets: ["124.221.250.220:8090"]
 
   - job_name: rabbitmq
+    # The aggregate /metrics endpoint has no queue label, so it mixes the
+    # judge queue with DLQs. Per-object metrics let the dashboard isolate
+    # code_queue during judge load tests.
+    metrics_path: /metrics/per-object
     static_configs:
       - targets: ["124.221.250.220:15692"]

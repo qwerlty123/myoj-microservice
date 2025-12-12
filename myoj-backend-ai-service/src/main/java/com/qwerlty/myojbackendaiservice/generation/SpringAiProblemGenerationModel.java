@@ -7,6 +7,9 @@ import com.qwerlty.myojbackendaiservice.model.dto.generation.CoveragePlan;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.ProblemDraftRequirements;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.ReferenceSolution;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.ValidationPrograms;
+import com.qwerlty.myojbackendaiservice.generation.skill.AuthoringSkillContext;
+import com.qwerlty.myojbackendaiservice.generation.skill.AuthoringSkillPhase;
+import com.qwerlty.myojbackendaiservice.generation.skill.AuthoringSkillRegistry;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -25,14 +28,17 @@ public class SpringAiProblemGenerationModel implements ProblemGenerationModel {
     private final ChatClient chatClient;
     private final ObjectMapper objectMapper;
     private final AiModelGateway modelGateway;
+    private final AuthoringSkillRegistry skillRegistry;
 
     public SpringAiProblemGenerationModel(
             @Qualifier("authoringStructuredChatClient") ChatClient chatClient,
             ObjectMapper objectMapper,
-            AiModelGateway modelGateway) {
+            AiModelGateway modelGateway,
+            AuthoringSkillRegistry skillRegistry) {
         this.chatClient = chatClient;
         this.objectMapper = objectMapper;
         this.modelGateway = modelGateway;
+        this.skillRegistry = skillRegistry;
     }
 
     @Override
@@ -45,8 +51,10 @@ public class SpringAiProblemGenerationModel implements ProblemGenerationModel {
                 solutionExplanation 给出正确算法、正确性说明和复杂度，不包含完整代码。
                 <requirements>%s</requirements>
                 """.formatted(json(requirements));
-        return modelGateway.callWithUsage("draft_specification", prompt, () -> {
-            var response = chatClient.prompt().system(SYSTEM).user(prompt)
+        String system = SYSTEM + "\n" + skillRegistry.select(
+                AuthoringSkillContext.from(AuthoringSkillPhase.DRAFT_SPECIFICATION, requirements)).guidance();
+        return modelGateway.callWithUsage("draft_specification", system + "\n" + prompt, () -> {
+            var response = chatClient.prompt().system(system).user(prompt)
                     .options(OpenAiChatOptions.builder().temperature(0.45).build()).call()
                     .responseEntity(GeneratedProblemSpec.class);
             return AiModelGateway.ModelCallResult.from(response.response(),
@@ -69,8 +77,11 @@ public class SpringAiProblemGenerationModel implements ProblemGenerationModel {
                 language 字段必须是 %s，code 必须是完整源码。
                 <problem>%s</problem>
                 """.formatted(languageRule, language, json(specification));
-        ReferenceSolution result = modelGateway.callWithUsage("reference_solution_" + language, prompt, () -> {
-            var response = chatClient.prompt().system(SYSTEM).user(prompt).call()
+        String system = SYSTEM + "\n" + skillRegistry.select(
+                AuthoringSkillContext.from(AuthoringSkillPhase.REFERENCE_SOLUTION, specification)).guidance();
+        ReferenceSolution result = modelGateway.callWithUsage(
+                "reference_solution_" + language, system + "\n" + prompt, () -> {
+            var response = chatClient.prompt().system(system).user(prompt).call()
                     .responseEntity(ReferenceSolution.class);
             return AiModelGateway.ModelCallResult.from(response.response(),
                     required(response.entity(), language + " 参考实现"));
@@ -88,8 +99,10 @@ public class SpringAiProblemGenerationModel implements ProblemGenerationModel {
                 两个程序都不得访问网络、文件、时间或随机数。
                 <problem>%s</problem>
                 """.formatted(json(specification));
-        return modelGateway.callWithUsage("validation_programs", prompt, () -> {
-            var response = chatClient.prompt().system(SYSTEM).user(prompt).call()
+        String system = SYSTEM + "\n" + skillRegistry.select(
+                AuthoringSkillContext.from(AuthoringSkillPhase.VALIDATION_PROGRAMS, specification)).guidance();
+        return modelGateway.callWithUsage("validation_programs", system + "\n" + prompt, () -> {
+            var response = chatClient.prompt().system(system).user(prompt).call()
                     .responseEntity(ValidationPrograms.class);
             return AiModelGateway.ModelCallResult.from(response.response(),
                     required(response.entity(), "验证程序"));
@@ -105,8 +118,10 @@ public class SpringAiProblemGenerationModel implements ProblemGenerationModel {
                 <problem>%s</problem>
                 <focus>%s</focus>
                 """.formatted(json(specification), constraints == null ? "" : constraints);
-        return modelGateway.callWithUsage("coverage_plan", prompt, () -> {
-            var response = chatClient.prompt().system(SYSTEM).user(prompt).call()
+        String system = SYSTEM + "\n" + skillRegistry.select(
+                AuthoringSkillContext.from(AuthoringSkillPhase.COVERAGE_PLAN, specification, constraints)).guidance();
+        return modelGateway.callWithUsage("coverage_plan", system + "\n" + prompt, () -> {
+            var response = chatClient.prompt().system(system).user(prompt).call()
                     .responseEntity(CoveragePlan.class);
             return AiModelGateway.ModelCallResult.from(response.response(),
                     required(response.entity(), "动态覆盖计划"));

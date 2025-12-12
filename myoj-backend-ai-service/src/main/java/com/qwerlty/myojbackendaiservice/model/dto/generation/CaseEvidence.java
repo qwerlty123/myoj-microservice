@@ -10,6 +10,7 @@ public class CaseEvidence {
     private String expectedOutput;
     private String javaOutput;
     private String cppOutput;
+    private String goOutput;
     private String oracleOutput;
     private boolean crossLanguageMatched;
     private boolean oracleMatched;

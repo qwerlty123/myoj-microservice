@@ -1,4 +1,4 @@
-package com.qwerlty.myojbackendaiservice.generation.workflow;
+package com.qwerlty.myojbackendaiservice.generation.sandbox;
 
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CandidateTestInput;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CaseEvidence;

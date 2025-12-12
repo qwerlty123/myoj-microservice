@@ -24,12 +24,26 @@ class ToolExecutionGuardTest {
         WorkflowContext context = context(guard, AuthoringTaskType.TEST_CASES);
 
         assertThatCode(() -> guard.authorize(context, "evaluateCandidateCases")).doesNotThrowAnyException();
+        assertThatCode(() -> guard.authorize(context, "searchAuthoringKnowledge")).doesNotThrowAnyException();
         assertThatThrownBy(() -> guard.authorize(context, "inspectCaseEvidence"))
                 .isInstanceOf(GenerationValidationException.class).hasMessageContaining("无权");
 
         task.setStatus(GenerationStatus.CANCELLED.getValue());
         assertThatThrownBy(() -> guard.authorize(context, "evaluateCandidateCases"))
                 .isInstanceOf(GenerationValidationException.class).hasMessageContaining("失效");
+    }
+
+    @Test
+    void permitsOnlyDraftRepairToolForProblemDraftTasks() {
+        AiProblemGenerationTaskMapper mapper = mock(AiProblemGenerationTaskMapper.class);
+        ToolExecutionGuard guard = new ToolExecutionGuard(mapper);
+        when(mapper.selectById(8L)).thenReturn(
+                task(8L, 7L, AuthoringTaskType.PROBLEM_DRAFT, GenerationStatus.RUNNING));
+        WorkflowContext context = context(guard, AuthoringTaskType.PROBLEM_DRAFT);
+
+        assertThatCode(() -> guard.authorize(context, "verifyDraftPatch")).doesNotThrowAnyException();
+        assertThatThrownBy(() -> guard.authorize(context, "evaluateCandidateCases"))
+                .isInstanceOf(GenerationValidationException.class).hasMessageContaining("无权");
     }
 
     private WorkflowContext context(ToolExecutionGuard guard, AuthoringTaskType type) {

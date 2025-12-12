@@ -3,6 +3,8 @@ package com.qwerlty.myojbackendaiservice.generation.workflow;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qwerlty.myojbackendaiservice.generation.AuthoringAgentModel;
 import com.qwerlty.myojbackendaiservice.generation.ProblemGenerationModel;
+import com.qwerlty.myojbackendaiservice.generation.knowledge.AuthoringKnowledgeRetriever;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.DefaultAuthoringSandboxVerifier;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.GeneratedJudgeCase;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.JudgeConfigValue;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.ProblemSourceDraft;
@@ -36,7 +38,8 @@ class QuestionQualityWorkflowTest {
         ProblemGenerationModel structured = mock(ProblemGenerationModel.class);
         AuthoringAgentModel agent = mock(AuthoringAgentModel.class);
         QuestionQualityWorkflow workflow = new QuestionQualityWorkflow(structured, agent,
-                new SandboxBatchVerifier(mock(CodeSandboxClient.class)), new ObjectMapper());
+                new DefaultAuthoringSandboxVerifier(mock(CodeSandboxClient.class)), new ObjectMapper(),
+                mock(AuthoringKnowledgeRetriever.class));
         ProblemSourceDraft source = new ProblemSourceDraft();
         source.setTitle("unfinished");
         QualityReviewTaskRequest request = new QualityReviewTaskRequest();
@@ -48,7 +51,7 @@ class QuestionQualityWorkflowTest {
         assertThat(artifact.getReport().getTotalScore()).isNull();
         assertThat(artifact.getReport().getIssues()).extracting(QualityIssue::getTitle)
                 .contains("题面为空", "标准答案为空", "测试用例为空");
-        verify(agent, never()).reviewQuality(any(), any());
+        verify(agent, never()).reviewQuality(any(), any(), any());
     }
 
     @Test
@@ -91,7 +94,8 @@ class QuestionQualityWorkflowTest {
             }
         };
         QuestionQualityWorkflow workflow = new QuestionQualityWorkflow(structured, agent,
-                new SandboxBatchVerifier(sandbox), new ObjectMapper());
+                new DefaultAuthoringSandboxVerifier(sandbox), new ObjectMapper(),
+                mock(AuthoringKnowledgeRetriever.class));
 
         var artifact = workflow.execute(WorkflowContext.testing(4L, AuthoringTaskType.QUALITY_REVIEW), completeRequest());
 
@@ -139,9 +143,10 @@ class QuestionQualityWorkflowTest {
                     return successful(inputs.stream().map(value -> "correct").toList());
                 });
         AuthoringAgentModel agent = mock(AuthoringAgentModel.class);
-        when(agent.reviewQuality(any(), any())).thenReturn(new QualityModelReview());
+        when(agent.reviewQuality(any(), any(), any())).thenReturn(new QualityModelReview());
         QuestionQualityWorkflow workflow = new QuestionQualityWorkflow(structured, agent,
-                new SandboxBatchVerifier(sandbox), new ObjectMapper());
+                new DefaultAuthoringSandboxVerifier(sandbox), new ObjectMapper(),
+                mock(AuthoringKnowledgeRetriever.class));
         QualityReviewTaskRequest request = completeRequest();
         request.getSourceDraft().setJudgeCase(List.of(
                 new GeneratedJudgeCase("1", "correct", "NORMAL"),

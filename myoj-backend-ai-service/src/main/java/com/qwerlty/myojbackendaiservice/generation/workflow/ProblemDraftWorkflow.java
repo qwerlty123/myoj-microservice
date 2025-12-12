@@ -2,8 +2,13 @@ package com.qwerlty.myojbackendaiservice.generation.workflow;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.qwerlty.myojbackendaiservice.generation.AuthoringAgentModel;
 import com.qwerlty.myojbackendaiservice.generation.GenerationValidationException;
 import com.qwerlty.myojbackendaiservice.generation.ProblemGenerationModel;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.AuthoringSandboxVerifier;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.VerificationPurpose;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.VerificationReport;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.VerificationRequest;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CandidateTestInput;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.GeneratedJudgeCase;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.GeneratedProblemDraft;
@@ -25,16 +30,19 @@ import java.util.List;
 @Component
 public class ProblemDraftWorkflow implements AuthoringWorkflow<ProblemDraftTaskRequest, ProblemDraftArtifact> {
     private static final List<String> LANGUAGES = List.of("java", "cpp", "go");
-    private static final int MAX_REPAIR_ATTEMPTS = 2;
+    private static final int MAX_SPEC_GENERATION_ATTEMPTS = 2;
 
     private final ProblemGenerationModel model;
-    private final SandboxBatchVerifier verifier;
+    private final AuthoringAgentModel agentModel;
+    private final AuthoringSandboxVerifier verifier;
     private final ObjectMapper objectMapper;
 
     public ProblemDraftWorkflow(ProblemGenerationModel model,
-                                SandboxBatchVerifier verifier,
+                                AuthoringAgentModel agentModel,
+                                AuthoringSandboxVerifier verifier,
                                 ObjectMapper objectMapper) {
         this.model = model;
+        this.agentModel = agentModel;
         this.verifier = verifier;
         this.objectMapper = objectMapper;
     }
@@ -50,38 +58,65 @@ public class ProblemDraftWorkflow implements AuthoringWorkflow<ProblemDraftTaskR
             state.setSpecification(generateSpecification(request));
             context.checkpoint(GenerationStage.DRAFTING_SPEC, state);
         }
-        BatchVerificationResult verification = null;
-        for (int repair = 0; repair <= MAX_REPAIR_ATTEMPTS; repair++) {
-            try {
-                if (state.getSolutions().isEmpty() || state.getPrograms() == null) {
-                    context.stage(GenerationStage.GENERATING_REFERENCE_SOLUTIONS);
-                    state.setSolutions(generateSolutions(state.getSpecification()));
-                    state.setPrograms(model.generateValidationPrograms(state.getSpecification()));
-                    context.checkpoint(GenerationStage.GENERATING_REFERENCE_SOLUTIONS, state);
-                }
-                context.stage(GenerationStage.VERIFYING_SAMPLES);
-                verification = verifier.verify(candidates(state.getSpecification()), state.getSolutions(),
-                        state.getPrograms(), normalizedConfig(state.getSpecification()));
-                if (!verification.rejected().isEmpty()
-                        || verification.accepted().size() != state.getSpecification().getSampleInputs().size()) {
-                    throw new GenerationValidationException("基础样例未通过多语言交叉验证");
-                }
-                break;
-            } catch (GenerationValidationException exception) {
-                if (repair >= MAX_REPAIR_ATTEMPTS) throw exception;
-                state.setSolutions(new ArrayList<>());
-                state.setPrograms(null);
+        ensureDownstream(context, state);
+        context.stage(GenerationStage.VERIFYING_SAMPLES);
+        VerificationReport verification = verify(state, VerificationPurpose.DRAFT_REPAIR);
+        updateVerificationState(context, state, verification);
+        ProblemDraftTools tools = new ProblemDraftTools(context, verifier, state, objectMapper);
+        while (!verification.passed() && tools.hasRemainingCalls()) {
+            int callsBefore = state.getRepairCalls();
+            agentModel.repairProblemDraft(new DraftRepairPrompt(
+                    state.getSpecification(), List.copyOf(state.getSolutions()), state.getPrograms(),
+                    verification, tools.currentStateHash(), tools.remainingCalls()), tools);
+            if (state.getRepairCalls() == callsBefore) {
+                throw new GenerationValidationException("题目草稿 Agent 未调用修复工具");
             }
+            ensureDownstream(context, state);
+            context.stage(GenerationStage.VERIFYING_SAMPLES);
+            verification = verify(state, VerificationPurpose.DRAFT_REPAIR);
+            updateVerificationState(context, state, verification);
         }
-        GeneratedProblemDraft draft = buildDraft(state, verification);
+        if (!verification.passed()) {
+            throw new GenerationValidationException("题目草稿局部修复耗尽: " + verification.summary());
+        }
+
+        VerificationReport finalVerification = verify(state, VerificationPurpose.DRAFT_FINAL_GATE);
+        updateVerificationState(context, state, finalVerification);
+        if (!finalVerification.passed()
+                || finalVerification.accepted().size() != state.getSpecification().getSampleInputs().size()) {
+            throw new GenerationValidationException("题目草稿未通过最终独立门禁: " + finalVerification.summary());
+        }
+        GeneratedProblemDraft draft = buildDraft(state, finalVerification);
         validatePersistenceSize(draft);
-        GenerationValidationReport report = report(state, verification);
+        GenerationValidationReport report = report(state, finalVerification);
         return new ProblemDraftArtifact(draft, report, List.copyOf(context.toolTrace()), false);
+    }
+
+    private void ensureDownstream(WorkflowContext context, DraftState state) {
+        if (!state.getSolutions().isEmpty() && state.getPrograms() != null) return;
+        context.stage(GenerationStage.GENERATING_REFERENCE_SOLUTIONS);
+        state.setSolutions(generateSolutions(state.getSpecification()));
+        state.setPrograms(model.generateValidationPrograms(state.getSpecification()));
+        state.setStateHash(ProblemDraftTools.stateHash(state, objectMapper));
+        context.checkpoint(GenerationStage.GENERATING_REFERENCE_SOLUTIONS, state);
+    }
+
+    private VerificationReport verify(DraftState state, VerificationPurpose purpose) {
+        return verifier.verify(new VerificationRequest(purpose, candidates(state.getSpecification()),
+                state.getSolutions(), state.getPrograms(), normalizedConfig(state.getSpecification())));
+    }
+
+    private void updateVerificationState(WorkflowContext context,
+                                         DraftState state,
+                                         VerificationReport verification) {
+        state.setLastVerificationSummary(verification.summary());
+        state.setStateHash(ProblemDraftTools.stateHash(state, objectMapper));
+        context.checkpoint(GenerationStage.VERIFYING_SAMPLES, state);
     }
 
     private GeneratedProblemSpec generateSpecification(ProblemDraftTaskRequest request) {
         GenerationValidationException failure = null;
-        for (int attempt = 0; attempt <= MAX_REPAIR_ATTEMPTS; attempt++) {
+        for (int attempt = 0; attempt <= MAX_SPEC_GENERATION_ATTEMPTS; attempt++) {
             try {
                 GeneratedProblemSpec spec = model.generateDraftSpecification(request.getRequirements());
                 validateSpecification(spec);
@@ -116,7 +151,7 @@ public class ProblemDraftWorkflow implements AuthoringWorkflow<ProblemDraftTaskR
         }
     }
 
-    private List<CandidateTestInput> candidates(GeneratedProblemSpec spec) {
+    static List<CandidateTestInput> candidates(GeneratedProblemSpec spec) {
         return spec.getSampleInputs().stream().map(input -> {
             CandidateTestInput candidate = new CandidateTestInput();
             candidate.setInput(input.getInput().replace("\r\n", "\n"));
@@ -126,7 +161,7 @@ public class ProblemDraftWorkflow implements AuthoringWorkflow<ProblemDraftTaskR
         }).toList();
     }
 
-    private GeneratedProblemDraft buildDraft(DraftState state, BatchVerificationResult verified) {
+    private GeneratedProblemDraft buildDraft(DraftState state, VerificationReport verified) {
         GeneratedProblemSpec spec = state.getSpecification();
         GeneratedProblemDraft draft = new GeneratedProblemDraft();
         draft.setTitle(spec.getTitle());
@@ -158,7 +193,7 @@ public class ProblemDraftWorkflow implements AuthoringWorkflow<ProblemDraftTaskR
         return result.toString();
     }
 
-    private GenerationValidationReport report(DraftState state, BatchVerificationResult verified) {
+    private GenerationValidationReport report(DraftState state, VerificationReport verified) {
         GenerationValidationReport report = new GenerationValidationReport();
         report.setCompiledLanguages(new ArrayList<>(LANGUAGES));
         report.setCrossLanguageMatched(true);
@@ -175,7 +210,7 @@ public class ProblemDraftWorkflow implements AuthoringWorkflow<ProblemDraftTaskR
         return report;
     }
 
-    private com.qwerlty.myojbackendaiservice.model.dto.generation.JudgeConfigValue normalizedConfig(
+    static com.qwerlty.myojbackendaiservice.model.dto.generation.JudgeConfigValue normalizedConfig(
             GeneratedProblemSpec spec) {
         return spec.getJudgeConfig() == null
                 ? new com.qwerlty.myojbackendaiservice.model.dto.generation.JudgeConfigValue()
@@ -200,5 +235,9 @@ public class ProblemDraftWorkflow implements AuthoringWorkflow<ProblemDraftTaskR
         private GeneratedProblemSpec specification;
         private List<ReferenceSolution> solutions = new ArrayList<>();
         private ValidationPrograms programs;
+        private int repairCalls;
+        private int specificationRepairCalls;
+        private String lastVerificationSummary;
+        private String stateHash;
     }
 }

@@ -49,9 +49,11 @@ public class KnowledgeImportJob implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) throws Exception {
-        Resource[] resources = new PathMatchingResourcePatternResolver()
-                .getResources("classpath*:knowledge/**/*.md");
-        if (resources.length == 0) {
+        PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
+        List<Resource> resources = new ArrayList<>();
+        resources.addAll(List.of(resolver.getResources("classpath*:knowledge/**/*.md")));
+        resources.addAll(List.of(resolver.getResources("classpath*:authoring-skills/*/references/**/*.md")));
+        if (resources.isEmpty()) {
             log.warn("No knowledge documents found, skip import");
             return;
         }
@@ -98,7 +100,7 @@ public class KnowledgeImportJob implements ApplicationRunner {
             vectorStore.add(List.copyOf(chunks.subList(start, end)));
         }
         log.info("Knowledge import finished: version={}, files={}, chunks={}",
-                knowledgeVersion, resources.length, chunks.size());
+                knowledgeVersion, resources.size(), chunks.size());
     }
 
     private KnowledgeCard parseCard(Resource resource, String raw) throws Exception {
@@ -126,6 +128,7 @@ public class KnowledgeImportJob implements ApplicationRunner {
         metadata.putIfAbsent("language", "common");
         metadata.putIfAbsent("errorType", "COMMON");
         metadata.putIfAbsent("source", "MyOJ Knowledge Base");
+        metadata.putIfAbsent("audience", "feedback");
         metadata.put("version", knowledgeVersion);
         metadata.put("path", path);
         return new KnowledgeCard(path, body, metadata);

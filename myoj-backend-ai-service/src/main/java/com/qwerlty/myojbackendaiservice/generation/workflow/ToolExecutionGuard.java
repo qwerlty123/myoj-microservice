@@ -14,9 +14,9 @@ import java.util.Set;
 @Component
 public class ToolExecutionGuard {
     private static final Map<AuthoringTaskType, Set<String>> ALLOWLIST = Map.of(
-            AuthoringTaskType.PROBLEM_DRAFT, Set.of(),
-            AuthoringTaskType.TEST_CASES, Set.of("evaluateCandidateCases"),
-            AuthoringTaskType.QUALITY_REVIEW, Set.of("inspectCaseEvidence"));
+            AuthoringTaskType.PROBLEM_DRAFT, Set.of("verifyDraftPatch"),
+            AuthoringTaskType.TEST_CASES, Set.of("evaluateCandidateCases", "searchAuthoringKnowledge"),
+            AuthoringTaskType.QUALITY_REVIEW, Set.of("inspectCaseEvidence", "searchAuthoringKnowledge"));
 
     private final AiProblemGenerationTaskMapper taskMapper;
 

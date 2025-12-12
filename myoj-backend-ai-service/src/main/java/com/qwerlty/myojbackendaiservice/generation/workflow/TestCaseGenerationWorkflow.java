@@ -4,6 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qwerlty.myojbackendaiservice.generation.AuthoringAgentModel;
 import com.qwerlty.myojbackendaiservice.generation.GenerationValidationException;
 import com.qwerlty.myojbackendaiservice.generation.ProblemGenerationModel;
+import com.qwerlty.myojbackendaiservice.generation.knowledge.AuthoringKnowledgeRetriever;
+import com.qwerlty.myojbackendaiservice.generation.knowledge.AuthoringKnowledgeTool;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.AuthoringSandboxVerifier;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.VerificationPurpose;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.VerificationReport;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.VerificationRequest;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CandidateTestInput;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CoveragePlan;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CoverageReport;
@@ -27,17 +33,20 @@ import java.util.List;
 public class TestCaseGenerationWorkflow implements AuthoringWorkflow<TestCaseTaskRequest, TestCaseArtifact> {
     private final ProblemGenerationModel structuredModel;
     private final AuthoringAgentModel agentModel;
-    private final SandboxBatchVerifier verifier;
+    private final AuthoringSandboxVerifier verifier;
     private final ObjectMapper objectMapper;
+    private final AuthoringKnowledgeRetriever knowledgeRetriever;
 
     public TestCaseGenerationWorkflow(ProblemGenerationModel structuredModel,
                                       AuthoringAgentModel agentModel,
-                                      SandboxBatchVerifier verifier,
-                                      ObjectMapper objectMapper) {
+                                      AuthoringSandboxVerifier verifier,
+                                      ObjectMapper objectMapper,
+                                      AuthoringKnowledgeRetriever knowledgeRetriever) {
         this.structuredModel = structuredModel;
         this.agentModel = agentModel;
         this.verifier = verifier;
         this.objectMapper = objectMapper;
+        this.knowledgeRetriever = knowledgeRetriever;
     }
 
     @Override public AuthoringTaskType type() { return AuthoringTaskType.TEST_CASES; }
@@ -66,20 +75,22 @@ public class TestCaseGenerationWorkflow implements AuthoringWorkflow<TestCaseTas
         context.stage(GenerationStage.AGENT_GENERATING_CASES);
         state.setRounds(0);
         TestCaseAgentTools tools = new TestCaseAgentTools(context, verifier, state, target);
+        AuthoringKnowledgeTool knowledgeTool = new AuthoringKnowledgeTool(context, knowledgeRetriever);
         tools.reopenSlotsForMissingCategories();
         while (generationIncomplete(state, tools, target) && tools.hasRemainingRounds()) {
             int roundsBefore = state.getRounds();
             agentModel.generateTestCases(new TestCaseAgentPrompt(state.getSpecification(),
-                    state.getCoveragePlan(), target, request.getConstraints()), tools);
+                    state.getCoveragePlan(), target, request.getConstraints()), tools, knowledgeTool);
             if (state.getRounds() == roundsBefore) {
                 throw new GenerationValidationException("测试用例 Agent 未调用验收工具");
             }
         }
         context.stage(GenerationStage.FINAL_VALIDATION);
         hardGate(state, tools, target);
-        BatchVerificationResult finalVerification = verifier.verify(
+        VerificationReport finalVerification = verifier.verify(new VerificationRequest(
+                VerificationPurpose.CASE_FINAL_GATE,
                 state.getAcceptedCases().stream().map(AcceptedCaseState::getCandidate).toList(),
-                state.getSolutions(), state.getPrograms(), config(state));
+                state.getSolutions(), state.getPrograms(), config(state)));
         if (!finalVerification.rejected().isEmpty() || finalVerification.accepted().size() != target) {
             throw new GenerationValidationException("最终用例集合未通过独立复核");
         }
@@ -149,7 +160,7 @@ public class TestCaseGenerationWorkflow implements AuthoringWorkflow<TestCaseTas
         return report;
     }
 
-    private GenerationValidationReport validation(BatchVerificationResult verified, TestCaseAgentTools tools) {
+    private GenerationValidationReport validation(VerificationReport verified, TestCaseAgentTools tools) {
         GenerationValidationReport report = new GenerationValidationReport();
         report.setCompiledLanguages(new ArrayList<>(List.of("java", "cpp")));
         report.setCrossLanguageMatched(true);

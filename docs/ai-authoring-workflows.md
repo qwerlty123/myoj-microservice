@@ -18,9 +18,10 @@ flowchart LR
     QUALITY --> AGENT
     STRUCTURED --> MODEL["OpenAI 兼容 ChatModel"]
     AGENT --> MODEL
-    CASES --> SANDBOX["代码沙箱"]
-    QUALITY --> SANDBOX
-    DRAFT --> SANDBOX
+    DRAFT --> VERIFY["AuthoringSandboxVerifier"]
+    CASES --> VERIFY
+    QUALITY --> VERIFY
+    VERIFY --> SANDBOX["签名远程代码沙箱"]
 ```
 
 公共接口只暴露稳定的工作流协议：
@@ -44,12 +45,21 @@ flowchart TD
     S["结构化题目规格 + 2–3 个样例输入"] --> R["独立生成 Java / C++ / Go"]
     R --> V["生成 Java 输入校验器和小数据 Oracle"]
     V --> G{"沙箱门禁"}
-    G -->|"失败，最多修复两次"| R
-    G -->|"三语言 + Oracle 一致"| M["Java 渲染 Markdown 示例"]
+    G -->|"结构化失败证据"| T["verifyDraftPatch 局部补丁"]
+    T -->|"代码或验证程序补丁"| G
+    T -->|"规格补丁，最多一次"| R
+    G -->|"三语言 + Oracle 一致"| F["绕过缓存的最终独立门禁"]
+    F --> M["Java 渲染 Markdown 示例"]
     M --> A["题面 + 题解 + Java 主参考实现 + 基础样例"]
 ```
 
-这条链路没有 Spring AI Tool Calling。最多两次修复是 Java 控制的业务循环。产物只包含基础样例，不生成完整隐藏测试集。
+初次验证失败后，Spring AI Agent 必须调用 `verifyDraftPatch`；每次最多三个白名单替换，整个任务最多三次工具调用。代码补丁只重跑哈希变化的产物，规格补丁会清空三语言解、validator、Oracle 和该任务的执行缓存，再由 Java 工作流重新生成。最终门禁始终绕过缓存。修复耗尽时任务失败并保留断点，不返回未验证草稿。产物只包含基础样例，不生成完整隐藏测试集。
+
+### 共享沙箱验证模块
+
+`AuthoringSandboxVerifier` 是三个工作流共同使用的深模块。调用方只选择 `DRAFT_REPAIR`、`DRAFT_FINAL_GATE`、`CASE_ACCEPTANCE`、`CASE_FINAL_GATE` 或 `QUALITY_BASELINE`；实现内部统一处理签名请求、并发租约、熔断、逐用例诊断、validator、多语言和 Oracle 比较。CE、RE、TLE、MLE、OLE 与一致性问题返回结构化 `VerificationIssue`，沙箱不可用继续作为依赖异常触发原任务重试。
+
+确定性执行按任务 ID、用途、语言、源码、输入和限制的 SHA-256 缓存，最多 1024 项、写入后 30 分钟过期；缓存不跨任务，基础设施失败不缓存，所有最终门禁绕过缓存。
 
 ### 生成用例 `TEST_CASES`
 
@@ -68,7 +78,7 @@ sequenceDiagram
         T-->>M: 通过/拒绝/剩余数量/覆盖缺口
     end
     M-->>W: 结束生成
-    W->>S: Java 最终门禁重新验证全部已接收用例
+    W->>S: Java/C++ 最终门禁重新验证全部已接收用例
     W-->>W: 校验数量与关键固定类别
 ```
 
@@ -99,7 +109,7 @@ flowchart TD
 |---|---|---:|---|
 | `aiChatClient` | RAG + `ToolCallAdvisor` | 原提交复盘配置 | 提交反馈，保持原链路 |
 | `authoringStructuredChatClient` | 无 | 默认 0.15；题目规格 0.45 | 题目规格、代码、验证程序、覆盖计划 |
-| `authoringAgentChatClient` | 仅 `ToolCallAdvisor` | 0.10 | 用例 Agent、质检 Agent |
+| `authoringAgentChatClient` | 仅 `ToolCallAdvisor` | 0.10 | 草稿修复、用例 Agent、质检 Agent |
 
 题目创作 Client 不配置 `RetrievalAugmentationAdvisor`，不访问向量库。任务结果只保存工具轮次、数量、耗时和终止原因，不保存完整模型对话。
 
@@ -122,7 +132,7 @@ flowchart TD
 }
 ```
 
-`workflowStateJson` 保存断点结构版本、Prompt 版本、已完成阶段、必要中间产物和工具摘要。阶段状态与进度原子更新。成功任务在写入结果时清理大对象；失败和超时任务保留断点。手动重试、实例中断恢复会在版本兼容时续跑；Prompt 或断点版本变化时清空断点全量重跑。
+`workflowStateJson` 保存断点结构版本、Prompt 版本、已完成阶段、必要中间产物和工具摘要。阶段状态与进度原子更新。成功任务在写入结果时清理大对象；失败和超时任务保留断点。手动重试、实例中断恢复会在版本兼容时续跑；Prompt 或断点版本变化时清空断点全量重跑。草稿修复协议使用 Prompt 版本 `v4`。
 
 默认预算为创建题目 12 分钟、生成用例 18 分钟、质检 15 分钟；并发 2、最多 3 次任务尝试，僵尸恢复阈值 23 分钟。
 
@@ -143,6 +153,6 @@ POST /api/ai/generation/tasks/{taskId}/cancel
 
 ## 可观测性与测试
 
-Micrometer 指标按任务类型、结果、阶段、工具名、轮次、通过数、拒绝数、重试原因和断点操作打标签。Spring AI observation 不记录 Prompt、Completion 或工具内容。
+Micrometer 指标按任务类型、结果、阶段、工具名、轮次、通过数、拒绝数、验证用途、错误码、缓存命中、重试原因和断点操作打标签。Spring AI observation 不记录 Prompt、Completion、源码、输入或完整 stderr。
 
 关键离线测试覆盖：注册表唯一性、三语言基础样例、真实 `ToolCallAdvisor` 多轮协议、工具 8/3 轮预算、批次上限、沙箱双解与 Oracle 不一致、Java 最终门禁、降级质检、固定评分、快照过期、补丁默认不选与字段冲突。提交反馈链路测试继续验证原有 RAG 和 Submission Tools。

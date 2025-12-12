@@ -1,6 +1,11 @@
 package com.qwerlty.myojbackendaiservice.generation.workflow;
 
 import com.qwerlty.myojbackendaiservice.generation.GenerationValidationException;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.AuthoringSandboxVerifier;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.VerificationOutcome;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.VerificationReport;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.VerificationRequest;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.VerifiedCandidate;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CandidateInputChunk;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CandidateTestInput;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CaseEvidence;
@@ -23,15 +28,15 @@ class AuthoringToolLimitsTest {
 
     @Test
     void testCaseToolExpandsCompactRangeBeforeSandboxVerification() {
-        SandboxBatchVerifier verifier = mock(SandboxBatchVerifier.class);
+        AuthoringSandboxVerifier verifier = mock(AuthoringSandboxVerifier.class);
         AtomicReference<String> verifiedInput = new AtomicReference<>();
         AtomicReference<Boolean> oracleEligible = new AtomicReference<>();
-        when(verifier.verify(anyList(), anyList(), any(ValidationPrograms.class), any()))
+        when(verifier.verify(any(VerificationRequest.class)))
                 .thenAnswer(invocation -> {
-                    List<CandidateTestInput> candidates = invocation.getArgument(0);
+                    List<CandidateTestInput> candidates = invocation.<VerificationRequest>getArgument(0).candidates();
                     verifiedInput.set(candidates.get(0).getInput());
                     oracleEligible.set(candidates.get(0).getOracleEligible());
-                    return new BatchVerificationResult(List.of(), List.of(), 0);
+                    return report(List.of());
                 });
         TestCaseGenerationState state = new TestCaseGenerationState();
         state.setSpecification(new GeneratedProblemSpec());
@@ -53,13 +58,13 @@ class AuthoringToolLimitsTest {
 
     @Test
     void testCaseToolRejectsCompactInputThatExpandsPastOneMebibyte() {
-        SandboxBatchVerifier verifier = mock(SandboxBatchVerifier.class);
+        AuthoringSandboxVerifier verifier = mock(AuthoringSandboxVerifier.class);
         AtomicReference<Integer> verifiedCandidates = new AtomicReference<>();
-        when(verifier.verify(anyList(), anyList(), any(ValidationPrograms.class), any()))
+        when(verifier.verify(any(VerificationRequest.class)))
                 .thenAnswer(invocation -> {
-                    List<CandidateTestInput> candidates = invocation.getArgument(0);
+                    List<CandidateTestInput> candidates = invocation.<VerificationRequest>getArgument(0).candidates();
                     verifiedCandidates.set(candidates.size());
-                    return new BatchVerificationResult(List.of(), List.of(), 0);
+                    return report(List.of());
                 });
         TestCaseGenerationState state = new TestCaseGenerationState();
         state.setSpecification(new GeneratedProblemSpec());
@@ -85,7 +90,7 @@ class AuthoringToolLimitsTest {
 
     @Test
     void testCaseToolReopensSlotsInLegacyCheckpointWithOnlyNormalCases() {
-        SandboxBatchVerifier verifier = mock(SandboxBatchVerifier.class);
+        AuthoringSandboxVerifier verifier = mock(AuthoringSandboxVerifier.class);
         TestCaseGenerationState state = new TestCaseGenerationState();
         state.setSpecification(new GeneratedProblemSpec());
         state.setPrograms(new ValidationPrograms());
@@ -105,13 +110,13 @@ class AuthoringToolLimitsTest {
 
     @Test
     void testCaseToolRejectsUnknownCategoryInsteadOfSilentlyTreatingItAsNormal() {
-        SandboxBatchVerifier verifier = mock(SandboxBatchVerifier.class);
-        when(verifier.verify(anyList(), anyList(), any(ValidationPrograms.class), any()))
+        AuthoringSandboxVerifier verifier = mock(AuthoringSandboxVerifier.class);
+        when(verifier.verify(any(VerificationRequest.class)))
                 .thenAnswer(invocation -> {
-                    List<CandidateTestInput> candidates = invocation.getArgument(0);
-                    return new BatchVerificationResult(candidates.stream()
+                    List<CandidateTestInput> candidates = invocation.<VerificationRequest>getArgument(0).candidates();
+                    return report(candidates.stream()
                             .map(candidate -> new VerifiedCandidate(candidate, "output", new CaseEvidence()))
-                            .toList(), List.of(), 0);
+                            .toList());
                 });
         TestCaseGenerationState state = new TestCaseGenerationState();
         state.setSpecification(new GeneratedProblemSpec());
@@ -132,8 +137,8 @@ class AuthoringToolLimitsTest {
 
     @Test
     void testCaseToolRecordsFailedSandboxRoundBeforeRethrowing() {
-        SandboxBatchVerifier verifier = mock(SandboxBatchVerifier.class);
-        when(verifier.verify(anyList(), anyList(), any(ValidationPrograms.class), any()))
+        AuthoringSandboxVerifier verifier = mock(AuthoringSandboxVerifier.class);
+        when(verifier.verify(any(VerificationRequest.class)))
                 .thenThrow(new GenerationValidationException("sandbox verification failed"));
         TestCaseGenerationState state = new TestCaseGenerationState();
         state.setSpecification(new GeneratedProblemSpec());
@@ -156,9 +161,8 @@ class AuthoringToolLimitsTest {
 
     @Test
     void testCaseToolEnforcesBatchAndRoundBudgets() {
-        SandboxBatchVerifier verifier = mock(SandboxBatchVerifier.class);
-        when(verifier.verify(anyList(), anyList(), any(ValidationPrograms.class), any()))
-                .thenReturn(new BatchVerificationResult(List.of(), List.of(), 0));
+        AuthoringSandboxVerifier verifier = mock(AuthoringSandboxVerifier.class);
+        when(verifier.verify(any(VerificationRequest.class))).thenReturn(report(List.of()));
         TestCaseGenerationState state = new TestCaseGenerationState();
         state.setSpecification(new GeneratedProblemSpec());
         state.setPrograms(new ValidationPrograms());
@@ -203,5 +207,9 @@ class AuthoringToolLimitsTest {
 
     private WorkflowContext testCaseContext() {
         return WorkflowContext.testing(1L, AuthoringTaskType.TEST_CASES);
+    }
+
+    private VerificationReport report(List<VerifiedCandidate> accepted) {
+        return new VerificationReport(VerificationOutcome.PASSED, accepted, List.of(), 0, List.of());
     }
 }

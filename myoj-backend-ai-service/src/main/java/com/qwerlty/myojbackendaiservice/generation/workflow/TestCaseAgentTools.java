@@ -1,6 +1,10 @@
 package com.qwerlty.myojbackendaiservice.generation.workflow;
 
 import com.qwerlty.myojbackendaiservice.generation.GenerationValidationException;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.AuthoringSandboxVerifier;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.VerificationPurpose;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.VerificationReport;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.VerificationRequest;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CandidateInputChunk;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CandidateEvaluationResult;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CandidateRejection;
@@ -33,12 +37,12 @@ public class TestCaseAgentTools {
     private static final int MAX_EXPANSION_ITEMS = 1_000_000;
 
     private final WorkflowContext context;
-    private final SandboxBatchVerifier verifier;
+    private final AuthoringSandboxVerifier verifier;
     private final TestCaseGenerationState state;
     private final int targetCount;
 
     public TestCaseAgentTools(WorkflowContext context,
-                              SandboxBatchVerifier verifier,
+                              AuthoringSandboxVerifier verifier,
                               TestCaseGenerationState state,
                               int targetCount) {
         this.context = context;
@@ -114,9 +118,13 @@ public class TestCaseAgentTools {
                 preliminary.add(new CandidateRejection("capacity", "已达到目标数量，不再接收额外候选"));
             }
         }
-        BatchVerificationResult verification;
+        VerificationReport verification;
         try {
-            verification = verifier.verify(unique, state.getSolutions(), state.getPrograms(), config());
+            verification = verifier.verify(new VerificationRequest(VerificationPurpose.CASE_ACCEPTANCE,
+                    unique, state.getSolutions(), state.getPrograms(), config()));
+            if (verification.hasArtifactIssue()) {
+                throw new GenerationValidationException(verification.summary());
+            }
         } catch (RuntimeException exception) {
             recordToolError(candidates.size(), preliminary.size(), started, exception);
             throw exception;

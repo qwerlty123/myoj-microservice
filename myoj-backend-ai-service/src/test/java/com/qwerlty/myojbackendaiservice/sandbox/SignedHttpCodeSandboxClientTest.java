@@ -51,12 +51,23 @@ class SignedHttpCodeSandboxClientTest {
                     assertThat(signature).isEqualTo(sign("sandbox-secret", timestamp, body));
                     assertThat(body).contains("\"language\":\"java\"", "\"purpose\":\"AI_VALIDATION\"");
                 })
-                .andRespond(withSuccess("{\"status\":1,\"outputList\":[\"2\"]}", MediaType.APPLICATION_JSON));
+                .andRespond(withSuccess("""
+                        {"status":1,"outputList":["2"],
+                         "judgeInfo":{"message":null,"memory":0,"time":12},
+                         "caseResults":[{"index":0,"exitCode":0,"output":"2","error":"",
+                         "timeMs":12,"timedOut":false,"outputLimitExceeded":false}]}
+                        """, MediaType.APPLICATION_JSON));
 
         SandboxExecuteResponse response = client.execute(
                 "java", "public class Main {}", List.of("1"), 1000, 262144, 65536);
 
         assertThat(response.getOutputList()).containsExactly("2");
+        assertThat(response.getJudgeInfo().getTime()).isEqualTo(12L);
+        assertThat(response.getCaseResults()).singleElement().satisfies(result -> {
+            assertThat(result.getIndex()).isZero();
+            assertThat(result.getExitCode()).isZero();
+            assertThat(result.getTimeMs()).isEqualTo(12L);
+        });
         server.verify();
     }
 

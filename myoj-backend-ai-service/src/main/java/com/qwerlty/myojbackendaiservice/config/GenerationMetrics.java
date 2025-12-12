@@ -2,7 +2,7 @@ package com.qwerlty.myojbackendaiservice.config;
 
 import com.qwerlty.myojbackendaiservice.mapper.AiProblemGenerationTaskMapper;
 import com.qwerlty.myojbackendaiservice.generation.AiModelGateway;
-import com.qwerlty.myojbackendaiservice.generation.workflow.SandboxBatchVerifier;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.AuthoringSandboxVerifier;
 import com.qwerlty.myojbackendaiservice.manager.DistributedLeaseManager;
 import com.qwerlty.myojbackendaiservice.model.enums.GenerationLane;
 import com.qwerlty.myojbackendaiservice.queue.GenerationStreamManager;
@@ -21,7 +21,7 @@ public class GenerationMetrics {
                              GenerationStreamManager streams,
                              DistributedLeaseManager leases,
                              AiModelGateway modelGateway,
-                             SandboxBatchVerifier sandboxVerifier,
+                             AuthoringSandboxVerifier sandboxVerifier,
                              @Qualifier("problemGenerationPublicExecutor") ExecutorService publicExecutor,
                              @Qualifier("problemGenerationReviewExecutor") ExecutorService reviewExecutor) {
         for (GenerationLane lane : GenerationLane.values()) {

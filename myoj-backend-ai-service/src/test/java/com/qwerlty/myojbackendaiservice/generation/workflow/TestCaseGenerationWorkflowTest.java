@@ -3,6 +3,8 @@ package com.qwerlty.myojbackendaiservice.generation.workflow;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qwerlty.myojbackendaiservice.generation.AuthoringAgentModel;
 import com.qwerlty.myojbackendaiservice.generation.ProblemGenerationModel;
+import com.qwerlty.myojbackendaiservice.generation.knowledge.AuthoringKnowledgeRetriever;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.DefaultAuthoringSandboxVerifier;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CandidateTestInput;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CaseEvidence;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CoveragePlan;
@@ -216,7 +218,8 @@ class TestCaseGenerationWorkflowTest {
                     return successful(inputs.stream().map(input -> "out:" + input).toList());
                 });
         return new TestCaseGenerationWorkflow(
-                structured, agent, new SandboxBatchVerifier(sandbox), new ObjectMapper());
+                structured, agent, new DefaultAuthoringSandboxVerifier(sandbox), new ObjectMapper(),
+                mock(AuthoringKnowledgeRetriever.class));
     }
 
     private TestCaseTaskRequest request() {

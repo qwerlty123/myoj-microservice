@@ -115,7 +115,13 @@ myoj:
       model-read-timeout-ms: ${AI_MODEL_READ_TIMEOUT_MS:120000}
       structured-model-read-timeout-ms: ${AI_STRUCTURED_MODEL_READ_TIMEOUT_MS:90000}
       agent-model-read-timeout-ms: ${AI_AGENT_MODEL_READ_TIMEOUT_MS:120000}
-      prompt-version: ${AI_GENERATION_PROMPT_VERSION:v2}
+      prompt-version: ${AI_GENERATION_PROMPT_VERSION:v4}
+      skills:
+        max-selected: ${AI_GENERATION_SKILLS_MAX_SELECTED:3}
+      knowledge-tool:
+        top-k: ${AI_GENERATION_KNOWLEDGE_TOP_K:3}
+        similarity-threshold: ${AI_GENERATION_KNOWLEDGE_SIMILARITY_THRESHOLD:0.68}
+        max-content-chars: ${AI_GENERATION_KNOWLEDGE_MAX_CONTENT_CHARS:1200}
       concurrency: ${AI_GENERATION_CONCURRENCY:2}
       public-concurrency: ${AI_GENERATION_PUBLIC_CONCURRENCY:2}
       review-concurrency: ${AI_GENERATION_REVIEW_CONCURRENCY:1}

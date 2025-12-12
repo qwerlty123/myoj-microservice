@@ -3,6 +3,13 @@ package com.qwerlty.myojbackendaiservice.generation.workflow;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qwerlty.myojbackendaiservice.generation.AuthoringAgentModel;
 import com.qwerlty.myojbackendaiservice.generation.ProblemGenerationModel;
+import com.qwerlty.myojbackendaiservice.generation.knowledge.AuthoringKnowledgeRetriever;
+import com.qwerlty.myojbackendaiservice.generation.knowledge.AuthoringKnowledgeTool;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.AuthoringSandboxVerifier;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.VerificationPurpose;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.VerificationReport;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.VerificationRequest;
+import com.qwerlty.myojbackendaiservice.generation.sandbox.VerifiedCandidate;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CandidateTestInput;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.CaseEvidence;
 import com.qwerlty.myojbackendaiservice.model.dto.generation.GeneratedJudgeCase;
@@ -40,17 +47,20 @@ public class QuestionQualityWorkflow implements AuthoringWorkflow<QualityReviewT
 
     private final ProblemGenerationModel structuredModel;
     private final AuthoringAgentModel agentModel;
-    private final SandboxBatchVerifier verifier;
+    private final AuthoringSandboxVerifier verifier;
     private final ObjectMapper objectMapper;
+    private final AuthoringKnowledgeRetriever knowledgeRetriever;
 
     public QuestionQualityWorkflow(ProblemGenerationModel structuredModel,
                                    AuthoringAgentModel agentModel,
-                                   SandboxBatchVerifier verifier,
-                                   ObjectMapper objectMapper) {
+                                   AuthoringSandboxVerifier verifier,
+                                   ObjectMapper objectMapper,
+                                   AuthoringKnowledgeRetriever knowledgeRetriever) {
         this.structuredModel = structuredModel;
         this.agentModel = agentModel;
         this.verifier = verifier;
         this.objectMapper = objectMapper;
+        this.knowledgeRetriever = knowledgeRetriever;
     }
 
     @Override public AuthoringTaskType type() { return AuthoringTaskType.QUALITY_REVIEW; }
@@ -81,8 +91,8 @@ public class QuestionQualityWorkflow implements AuthoringWorkflow<QualityReviewT
             context.checkpoint(GenerationStage.SEMANTIC_REVIEWING, state);
         }
         context.stage(GenerationStage.VERIFYING_EXISTING_CASES);
-        BatchVerificationResult baseline = verifier.verify(candidates(source), state.getSolutions(),
-                state.getPrograms(), config(source));
+        VerificationReport baseline = verifier.verify(new VerificationRequest(VerificationPurpose.QUALITY_BASELINE,
+                candidates(source), state.getSolutions(), state.getPrograms(), config(source)));
         state.setBaselineEvidence(evidence(source, baseline));
         context.checkpoint(GenerationStage.VERIFYING_EXISTING_CASES, state);
         addExecutionIssuesAndPatches(source, baseline, issues, patches);
@@ -90,10 +100,12 @@ public class QuestionQualityWorkflow implements AuthoringWorkflow<QualityReviewT
         context.stage(GenerationStage.AGENT_EVIDENCE_REVIEW);
         QualityEvidenceTools tools = new QualityEvidenceTools(context,
                 indexes -> inspectEvidence(indexes, state.getBaselineEvidence()));
+        AuthoringKnowledgeTool knowledgeTool = new AuthoringKnowledgeTool(context, knowledgeRetriever);
         QualityModelReview modelReview;
         try {
             modelReview = agentModel.reviewQuality(
-                    new QualityAgentPrompt(source, List.copyOf(issues), List.copyOf(state.getBaselineEvidence())), tools);
+                    new QualityAgentPrompt(source, List.copyOf(issues), List.copyOf(state.getBaselineEvidence())),
+                    tools, knowledgeTool);
         } catch (RuntimeException exception) {
             context.stage(GenerationStage.BUILDING_REPORT);
             QualityVerificationSummary degradedSummary = verificationSummary(source, baseline);
@@ -156,10 +168,10 @@ public class QuestionQualityWorkflow implements AuthoringWorkflow<QualityReviewT
     }
 
     private void addExecutionIssuesAndPatches(ProblemSourceDraft source,
-                                               BatchVerificationResult baseline,
+                                               VerificationReport baseline,
                                                List<QualityIssue> issues,
                                                List<QualityPatch> patches) {
-        if (!baseline.rejected().isEmpty()) {
+        if (!baseline.rejected().isEmpty() || !baseline.issues().isEmpty()) {
             issues.add(issue("case-validation-failed", "TEST_CASES", "BLOCKER",
                     "已有用例未通过独立程序校验", "输入校验、双解或 Oracle 证据不一致"));
         }
@@ -235,18 +247,18 @@ public class QuestionQualityWorkflow implements AuthoringWorkflow<QualityReviewT
         return report;
     }
 
-    private QualityVerificationSummary verificationSummary(ProblemSourceDraft source, BatchVerificationResult baseline) {
+    private QualityVerificationSummary verificationSummary(ProblemSourceDraft source, VerificationReport baseline) {
         QualityVerificationSummary summary = new QualityVerificationSummary();
         summary.setSemanticReviewed(true);
         summary.setCheckSolutionsCompiled(true);
-        summary.setCrossLanguageMatched(baseline.rejected().isEmpty());
+        summary.setCrossLanguageMatched(baseline.passed());
         summary.setTotalCases(source.getJudgeCase().size());
         summary.setVerifiedCases(baseline.accepted().size());
         summary.setOracleCases(baseline.oracleCases());
         return summary;
     }
 
-    private List<CaseEvidence> evidence(ProblemSourceDraft source, BatchVerificationResult baseline) {
+    private List<CaseEvidence> evidence(ProblemSourceDraft source, VerificationReport baseline) {
         List<CaseEvidence> result = new ArrayList<>();
         for (VerifiedCandidate candidate : baseline.accepted()) {
             CaseEvidence evidence = candidate.evidence();

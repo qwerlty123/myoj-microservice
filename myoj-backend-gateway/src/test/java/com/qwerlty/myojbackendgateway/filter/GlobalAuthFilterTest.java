@@ -34,7 +34,7 @@ class GlobalAuthFilterTest {
         String token = JwtUtils.generateToken(7L, "admin");
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 org.springframework.mock.http.server.reactive.MockServerHttpRequest
-                        .post("/api/ai/generation/tasks")
+                        .post("/api/ai/chat/message/send")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                         .header("X-user-Id", "999")
                         .header("X-user-Role", "admin,user")

@@ -1,35 +1,17 @@
 spring:
   datasource:
-    url: ${MYSQL_URL:jdbc:mysql://124.221.250.220:3306/myoj?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}
-    username: ${MYSQL_USERNAME:admin}
+    url: ${MYSQL_URL}
+    username: ${MYSQL_USERNAME}
     password: ${MYSQL_PASSWORD}
-  data:
-    redis:
-      host: ${REDIS_HOST:124.221.250.220}
-      port: ${REDIS_PORT:6379}
-      password: ${REDIS_PASSWORD}
   cloud:
     nacos:
-      username: nacos
-      password: ${NACOS_PASSWORD}
       discovery:
-        server-addr: ${NACOS_SERVER_ADDR:124.221.250.220:8848}
+        group: ${NACOS_DISCOVERY_GROUP:DEFAULT_GROUP}
 
 myoj:
   security:
     gateway-token: ${GATEWAY_TRUST_TOKEN}
   ai:
-    internal-token: ${AI_INTERNAL_TOKEN}
-    generation:
-      public-enabled: ${AI_GENERATION_PUBLIC_ENABLED:false}
-      model-concurrency:
-        public: ${AI_MODEL_PUBLIC_CONCURRENCY:0}
-        review: ${AI_MODEL_REVIEW_CONCURRENCY:0}
-      cost:
-        public-daily-budget-micros: ${AI_PUBLIC_DAILY_BUDGET_MICROS:0}
-        review-daily-budget-micros: ${AI_REVIEW_DAILY_BUDGET_MICROS:0}
-        input-price-micros-per-million: ${AI_INPUT_PRICE_MICROS_PER_MILLION:0}
-        output-price-micros-per-million: ${AI_OUTPUT_PRICE_MICROS_PER_MILLION:0}
-      sandbox:
-        url: ${CODESANDBOX_URL}
-        secret-key: ${CODESANDBOX_SECRET_KEY}
+    sandbox:
+      url: ${CODESANDBOX_URL}
+      secret-key: ${CODESANDBOX_SECRET_KEY}

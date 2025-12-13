@@ -1,15 +1,18 @@
 package com.qwerlty.myojbackendaiservice.sandbox;
 
-import lombok.Data;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
-import java.util.ArrayList;
 import java.util.List;
 
-@Data
-public class SandboxExecuteResponse {
-    private List<String> outputList = new ArrayList<>();
-    private String message;
-    private Integer status;
-    private SandboxJudgeInfo judgeInfo;
-    private List<SandboxCaseExecutionResult> caseResults = new ArrayList<>();
+@JsonIgnoreProperties(ignoreUnknown = true)
+public record SandboxExecuteResponse(
+        List<String> outputList,
+        String message,
+        Integer status,
+        SandboxJudgeInfo judgeInfo,
+        List<SandboxCaseResult> caseResults
+) {
+    public boolean successful() {
+        return Integer.valueOf(1).equals(status);
+    }
 }

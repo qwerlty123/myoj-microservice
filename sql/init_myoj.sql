@@ -94,109 +94,6 @@ create table if not exists judge_task_outbox
     index idx_status_leaseUntil (status, leaseUntil)
 ) comment '判题投递外盒' collate = utf8mb4_unicode_ci;
 
--- AI 提交复盘业务记录；创建和重试直接写 Redis Stream，不作为本地消息表使用
-create table if not exists ai_feedback_task
-(
-    id               bigint                                   not null comment 'id' primary key,
-    requestKey       char(64)                                 not null comment 'SHA-256 幂等键',
-    userId           bigint                                   not null comment '用户 id',
-    submissionId     bigint                                   not null comment '提交 id',
-    questionId       bigint                                   not null comment '题目 id',
-    status           tinyint        default 0                 not null comment '0待执行 1执行中 2成功 3失败 4超时',
-    resultJson       json                                     null comment '完整结构化复盘结果（含引用）',
-    modelName        varchar(128)                              not null comment '模型名称',
-    promptVersion    varchar(64)                               not null comment 'Prompt 版本',
-    knowledgeVersion varchar(64)                               not null comment '知识库版本',
-    inputTokens      int unsigned    default 0                 not null comment '输入 Token',
-    outputTokens     int unsigned    default 0                 not null comment '输出 Token',
-    latencyMs        bigint unsigned default 0                 not null comment '模型调用耗时',
-    attemptCount     smallint unsigned default 0               not null comment '实际执行次数',
-    startedTime      datetime                                  null comment '最近开始执行时间',
-    finishedTime     datetime                                  null comment '终态完成时间',
-    errorCode        varchar(64)                               null comment '错误码',
-    lastError        varchar(512)                              null comment '最近错误摘要',
-    createTime       datetime        default CURRENT_TIMESTAMP not null comment '创建时间',
-    updateTime       datetime        default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
-    unique index uk_requestKey (requestKey),
-    index idx_status_startedTime (status, startedTime),
-    index idx_user_submission_time (userId, submissionId, createTime),
-    index idx_createTime (createTime)
-) comment 'AI 提交复盘任务' collate = utf8mb4_unicode_ci;
-
--- AI 自动出题任务；生成草稿不会直接写入 question 表
-create table if not exists ai_problem_generation_task
-(
-    id             bigint                                   not null comment '任务 id' primary key,
-    requestKey     char(64)                                 not null comment '用户幂等键哈希',
-    userId         bigint                                   not null comment '管理员用户 id',
-    mode           varchar(32)                              not null comment 'PROBLEM_DRAFT / TEST_CASES / QUALITY_REVIEW',
-    lane           varchar(32)    default 'PUBLIC_AUTHORING' not null,
-    sourceTaskId   bigint                                   null,
-    submissionId   bigint                                   null,
-    traceId        varchar(64)                              null,
-    status         tinyint        default 0                 not null comment '0待执行 1执行中 2待审核 3失败 4超时 5取消',
-    stage          varchar(64)    default 'QUEUED'          not null,
-    progress       tinyint unsigned default 0               not null,
-    requestJson    json                                     not null,
-    resultJson     json                                     null,
-    validationJson json                                     null,
-    workflowStateJson json                                  null comment '阶段断点及必要中间产物',
-    modelName      varchar(128)                              not null,
-    promptVersion  varchar(64)                               not null,
-    inputTokens    int unsigned    default 0                 not null,
-    outputTokens   int unsigned    default 0                 not null,
-    quotaCost      smallint unsigned default 0               not null,
-    quotaDate      date                                      null,
-    quotaStatus    varchar(16)     default 'RESERVED'        not null,
-    estimatedCostMicros bigint unsigned default 0            not null,
-    modelCallCount int unsigned    default 0                 not null,
-    latencyMs      bigint unsigned default 0                 not null,
-    attemptCount   smallint unsigned default 0               not null,
-    cancelRequested tinyint       default 0                 not null,
-    startedTime    datetime                                  null,
-    finishedTime   datetime                                  null,
-    errorCode      varchar(64)                               null,
-    lastError      varchar(512)                              null,
-    failureStage   varchar(64)                               null,
-    degraded       tinyint         default 0                 not null,
-    nextAttemptTime datetime                                 null,
-    payloadPurgedTime datetime                               null,
-    createTime     datetime        default CURRENT_TIMESTAMP not null,
-    updateTime     datetime        default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP,
-    version        int unsigned    default 0                 not null,
-    unique index uk_generation_user_request (userId, requestKey),
-    index idx_generation_user_time (userId, createTime),
-    index idx_generation_status_time (status, updateTime),
-    index idx_generation_lane_schedule (status, lane, nextAttemptTime, createTime),
-    index idx_generation_user_status_type (userId, status, mode)
-) comment 'AI 题目生成任务' collate = utf8mb4_unicode_ci;
-
-create table if not exists ai_question_review_submission
-(
-    id                    bigint                                   not null primary key,
-    userId                bigint                                   not null,
-    parentSubmissionId    bigint                                   null,
-    version               int unsigned   default 1                 not null,
-    status                varchar(16)    default 'PENDING'         not null,
-    snapshotJson          json                                     not null,
-    executionHash         char(64)                                 not null,
-    problemDraftTaskId    bigint                                   not null,
-    testCasesTaskId       bigint                                   not null,
-    qualityReviewTaskId   bigint                                   null,
-    reviewerId            bigint                                   null,
-    reviewReason          varchar(1000)                             null,
-    publishedQuestionId   bigint                                   null,
-    reviewTime            datetime                                  null,
-    createTime            datetime        default CURRENT_TIMESTAMP not null,
-    updateTime            datetime        default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP,
-    lockVersion           int unsigned    default 0                 not null,
-    index idx_ai_review_test_task (testCasesTaskId),
-    unique index uk_ai_review_parent_version (parentSubmissionId, version),
-    index idx_ai_review_user_time (userId, createTime),
-    index idx_ai_review_status_time (status, createTime),
-    index idx_ai_review_quality_task (qualityReviewTaskId)
-) comment 'AI 题目人工审核版本' collate = utf8mb4_unicode_ci;
-
 -- 评论表（与 Comment 实体一致）
 create table if not exists comment
 (
@@ -265,3 +162,144 @@ create table if not exists post_favour
     index idx_postId (postId),
     index idx_userId (userId)
 ) comment '帖子收藏';
+
+-- AI 多轮题目辅导（完整定义亦见 migration_20260819_ai_chat.sql）
+create table if not exists ai_chat_session
+(
+    id bigint auto_increment primary key,
+    userId bigint not null,
+    questionId bigint not null,
+    mode varchar(16) default 'normal' not null,
+    status tinyint default 0 not null comment '0 active, 1 archived, 2 disabled',
+    disableReason varchar(512) null,
+    lastMessageTime datetime default CURRENT_TIMESTAMP not null,
+    expireTime datetime not null,
+    createTime datetime default CURRENT_TIMESTAMP not null,
+    updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP,
+    isDelete tinyint default 0 not null,
+    unique index uk_ai_chat_user_question (userId, questionId, isDelete),
+    index idx_ai_chat_expire (status, expireTime),
+    index idx_ai_chat_question (questionId)
+) comment 'AI question tutoring session' collate = utf8mb4_unicode_ci;
+
+create table if not exists ai_chat_message
+(
+    id bigint auto_increment primary key,
+    sessionId bigint not null,
+    role varchar(16) not null,
+    mode varchar(16) default 'normal' not null,
+    content longtext not null,
+    toolEvents longtext null,
+    violation tinyint default 0 not null,
+    createTime datetime default CURRENT_TIMESTAMP not null,
+    isDelete tinyint default 0 not null,
+    index idx_ai_chat_message_session (sessionId, id)
+) comment 'AI tutoring message history' collate = utf8mb4_unicode_ci;
+
+create table if not exists ai_prompt_config
+(
+    id bigint auto_increment primary key,
+    scene varchar(32) not null,
+    versionNo int default 1 not null,
+    promptContent longtext not null,
+    enabled tinyint default 1 not null,
+    isActive tinyint default 1 not null,
+    createTime datetime default CURRENT_TIMESTAMP not null,
+    updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP,
+    isDelete tinyint default 0 not null,
+    unique index uk_ai_prompt_version (scene, versionNo, isDelete)
+) comment 'AI prompt configuration' collate = utf8mb4_unicode_ci;
+
+create table if not exists ai_model_config
+(
+    id bigint auto_increment primary key,
+    modelName varchar(128) not null,
+    enabled tinyint default 1 not null,
+    isDefault tinyint default 0 not null,
+    createTime datetime default CURRENT_TIMESTAMP not null,
+    updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP,
+    isDelete tinyint default 0 not null,
+    index idx_ai_model_active (enabled, isDefault, isDelete)
+) comment 'AI model selection configuration' collate = utf8mb4_unicode_ci;
+
+create table if not exists ai_disable_rule
+(
+    id bigint auto_increment primary key,
+    scopeType varchar(32) not null comment 'global, user, question',
+    scopeId bigint null,
+    reason varchar(512) not null,
+    startTime datetime null,
+    endTime datetime null,
+    enabled tinyint default 1 not null,
+    createTime datetime default CURRENT_TIMESTAMP not null,
+    updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP,
+    isDelete tinyint default 0 not null,
+    index idx_ai_disable_active (enabled, startTime, endTime),
+    index idx_ai_disable_scope (scopeType, scopeId)
+) comment 'AI availability rules' collate = utf8mb4_unicode_ci;
+
+create table if not exists ai_sensitive_word
+(
+    id bigint auto_increment primary key,
+    word varchar(255) not null,
+    enabled tinyint default 1 not null,
+    createTime datetime default CURRENT_TIMESTAMP not null,
+    updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP,
+    isDelete tinyint default 0 not null,
+    unique index uk_ai_sensitive_word (word, isDelete)
+) comment 'AI input sensitive words' collate = utf8mb4_unicode_ci;
+
+create table if not exists ai_violation_log
+(
+    id bigint auto_increment primary key,
+    userId bigint not null,
+    sessionId bigint not null,
+    messageId bigint null,
+    violationType varchar(64) not null,
+    content varchar(1000) null,
+    createTime datetime default CURRENT_TIMESTAMP not null,
+    isDelete tinyint default 0 not null,
+    index idx_ai_violation_user (userId, createTime),
+    index idx_ai_violation_session (sessionId)
+) comment 'AI policy violation audit log' collate = utf8mb4_unicode_ci;
+
+create table if not exists ai_tool_config
+(
+    id bigint auto_increment primary key,
+    toolName varchar(64) not null,
+    enabled tinyint default 1 not null,
+    dailyLimit int default 30 not null,
+    createTime datetime default CURRENT_TIMESTAMP not null,
+    updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP,
+    isDelete tinyint default 0 not null,
+    unique index uk_ai_tool_name (toolName, isDelete)
+) comment 'AI Agent tool policy' collate = utf8mb4_unicode_ci;
+
+create table if not exists ai_tool_call_log
+(
+    id bigint auto_increment primary key,
+    userId bigint not null,
+    sessionId bigint not null,
+    toolName varchar(64) not null,
+    success tinyint not null,
+    resultSummary varchar(1000) null,
+    createTime datetime default CURRENT_TIMESTAMP not null,
+    isDelete tinyint default 0 not null,
+    index idx_ai_tool_daily (userId, toolName, createTime),
+    index idx_ai_tool_session (sessionId)
+) comment 'AI Agent tool call audit log' collate = utf8mb4_unicode_ci;
+
+insert ignore into ai_prompt_config (scene, versionNo, promptContent, enabled, isActive)
+values ('normal', 1,
+        '你是 MyOJ 的算法题辅导助手。结合题面、用户代码、判题结果和历史对话回答。优先引导用户定位问题，除非明确要求，不直接给完整标准答案。',
+        1, 1),
+       ('agent', 1,
+        '你是 MyOJ 的算法题智能辅导 Agent。必要时使用工具分析提交、构造测试、分析报错或检索公开资料，并基于真实工具结果给出结论。',
+        1, 1);
+
+insert ignore into ai_tool_config (toolName, enabled, dailyLimit)
+values ('searchWeb', 1, 20),
+       ('submission_analysis', 1, 50),
+       ('testcase_generator', 1, 50),
+       ('sample_error_analyzer', 1, 50),
+       ('run_user_code', 1, 20);

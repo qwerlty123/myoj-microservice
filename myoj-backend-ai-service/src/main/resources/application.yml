@@ -2,177 +2,94 @@ spring:
   application:
     name: myoj-backend-ai-service
   profiles:
-    # 本机运行后端、服务器运行中间件；环境变量仍可覆盖此值。
-    active: dev
+    active: ${SPRING_PROFILES_ACTIVE:dev}
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: ${MYSQL_URL:jdbc:mysql://124.221.250.220:3306/myoj?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}
-    username: ${MYSQL_USERNAME:admin}
-    # 密码、API Key 和内部令牌不写入配置文件。
-    password: ${MYSQL_PASSWORD}
-  data:
-    redis:
-      host: ${REDIS_HOST:124.221.250.220}
-      port: ${REDIS_PORT:6379}
-      password: ${REDIS_PASSWORD}
-      database: ${REDIS_DATABASE:1}
-      timeout: 5s
+    url: ${MYSQL_URL:jdbc:mysql://127.0.0.1:3306/myoj?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${AI_DB_MAX_POOL_SIZE:8}
+      minimum-idle: ${AI_DB_MIN_IDLE:1}
   cloud:
     nacos:
-      username: nacos
-      password: ${NACOS_PASSWORD}
+      username: ${NACOS_USERNAME:nacos}
+      password: ${NACOS_PASSWORD:}
       discovery:
         server-addr: ${NACOS_SERVER_ADDR:124.221.250.220:8848}
-        group: LOCAL_DEV_GROUP
+        group: ${NACOS_DISCOVERY_GROUP:DEFAULT_GROUP}
+    openfeign:
+      client:
+        config:
+          default:
+            connect-timeout: 3000
+            read-timeout: 5000
   ai:
     retry:
       max-attempts: 1
-    model:
-      chat: openai
-      embedding: openai
     openai:
-      api-key: ${AI_CHAT_API_KEY}
+      api-key: ${AI_CHAT_API_KEY:}
       chat:
         base-url: ${AI_CHAT_BASE_URL:https://api.deepseek.com}
-        api-key: ${AI_CHAT_API_KEY}
+        api-key: ${AI_CHAT_API_KEY:}
         options:
           model: ${AI_CHAT_MODEL:deepseek-v4-flash}
           temperature: 0.2
-      embedding:
-        base-url: ${AI_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
-        api-key: ${AI_EMBEDDING_API_KEY}
-        options:
-          model: ${AI_EMBEDDING_MODEL:text-embedding-v4}
-    vectorstore:
-      qdrant:
-        host: ${QDRANT_HOST:124.221.250.220}
-        port: ${QDRANT_GRPC_PORT:6334}
-        api-key: ${QDRANT_API_KEY}
-        collection-name: myoj_knowledge_${AI_KNOWLEDGE_VERSION:v1}
-        use-tls: ${QDRANT_USE_TLS:false}
-        # 首次导入知识库时让 Spring AI 先创建对应 collection。
-        initialize-schema: ${AI_KNOWLEDGE_INITIALIZE:false}
-      observations:
-        log-query-response: false
     tools:
       observations:
         include-content: false
     chat:
-      client:
-        observations:
-          log-prompt: false
-          log-completion: false
       observations:
         log-prompt: false
         log-completion: false
-        include-error-logging: false
+
 server:
   address: 0.0.0.0
   port: 8106
   servlet:
     context-path: /api/ai
 
-mybatis-plus:
-  configuration:
-    map-underscore-to-camel-case: false
-  global-config:
-    db-config:
-      id-type: assign_id
-
 myoj:
   security:
     gateway-token: ${GATEWAY_TRUST_TOKEN:change-me-gateway-token}
   ai:
-    internal-token: ${AI_INTERNAL_TOKEN}
-    model-name: ${AI_CHAT_MODEL:deepseek-v4-flash}
-    prompt-version: ${AI_PROMPT_VERSION:v1}
-    knowledge-version: ${AI_KNOWLEDGE_VERSION:v1}
-    knowledge:
-      initialize: ${AI_KNOWLEDGE_INITIALIZE:false}
-      top-k: 5
-      similarity-threshold: 0.65
-      overlap-chars: 400
-      # DashScope text-embedding-v4 每次最多接收 10 条内容。
-      embedding-batch-size: ${AI_KNOWLEDGE_EMBEDDING_BATCH_SIZE:10}
-    task:
-      recovery-interval-ms: 15000
-      running-timeout-ms: 120000
-      analysis-timeout-ms: 90000
-      max-execute-retry: 3
-    stream:
-      key: ${AI_REDIS_STREAM_KEY:myoj:ai:feedback:stream}
-      group: ${AI_REDIS_STREAM_GROUP:myoj-ai-feedback}
-      consumer-prefix: ${AI_REDIS_CONSUMER_PREFIX:${HOSTNAME:ai-service}}
-      concurrency: 2
-      max-length: 10000
-      reclaim-batch-size: 20
-      ensure-group-interval-ms: 30000
-    rate-limit:
-      per-user-per-hour: 10
-    generation:
-      public-enabled: ${AI_GENERATION_PUBLIC_ENABLED:false}
-      model-connect-timeout-ms: ${AI_MODEL_CONNECT_TIMEOUT_MS:3000}
-      model-read-timeout-ms: ${AI_MODEL_READ_TIMEOUT_MS:120000}
-      structured-model-read-timeout-ms: ${AI_STRUCTURED_MODEL_READ_TIMEOUT_MS:90000}
-      agent-model-read-timeout-ms: ${AI_AGENT_MODEL_READ_TIMEOUT_MS:120000}
-      prompt-version: ${AI_GENERATION_PROMPT_VERSION:v4}
-      skills:
-        max-selected: ${AI_GENERATION_SKILLS_MAX_SELECTED:3}
-      knowledge-tool:
-        top-k: ${AI_GENERATION_KNOWLEDGE_TOP_K:3}
-        similarity-threshold: ${AI_GENERATION_KNOWLEDGE_SIMILARITY_THRESHOLD:0.68}
-        max-content-chars: ${AI_GENERATION_KNOWLEDGE_MAX_CONTENT_CHARS:1200}
-      concurrency: ${AI_GENERATION_CONCURRENCY:2}
-      public-concurrency: ${AI_GENERATION_PUBLIC_CONCURRENCY:2}
-      review-concurrency: ${AI_GENERATION_REVIEW_CONCURRENCY:1}
-      quota:
-        daily-credits: ${AI_GENERATION_DAILY_CREDITS:10}
-      capacity:
-        total: ${AI_GENERATION_TOTAL_CAPACITY:200}
-        public: ${AI_GENERATION_PUBLIC_CAPACITY:180}
-        review: ${AI_GENERATION_REVIEW_CAPACITY:20}
-        max-pending-per-user: ${AI_GENERATION_MAX_PENDING_PER_USER:2}
-      model-concurrency:
-        public: ${AI_MODEL_PUBLIC_CONCURRENCY:2}
-        review: ${AI_MODEL_REVIEW_CONCURRENCY:1}
-      sandbox-concurrency:
-        public: ${AI_SANDBOX_PUBLIC_CONCURRENCY:2}
-        review: ${AI_SANDBOX_REVIEW_CONCURRENCY:1}
-      cost:
-        public-daily-budget-micros: ${AI_PUBLIC_DAILY_BUDGET_MICROS:0}
-        review-daily-budget-micros: ${AI_REVIEW_DAILY_BUDGET_MICROS:0}
-        input-price-micros-per-million: ${AI_INPUT_PRICE_MICROS_PER_MILLION:0}
-        output-price-micros-per-million: ${AI_OUTPUT_PRICE_MICROS_PER_MILLION:0}
-      circuit:
-        failure-threshold: ${AI_CIRCUIT_FAILURE_THRESHOLD:5}
-        open-ms: ${AI_CIRCUIT_OPEN_MS:30000}
-      workflow:
-        problem-draft-timeout-ms: ${AI_PROBLEM_DRAFT_TIMEOUT_MS:720000}
-        test-cases-timeout-ms: ${AI_TEST_CASES_TIMEOUT_MS:1080000}
-        quality-review-timeout-ms: ${AI_QUALITY_REVIEW_TIMEOUT_MS:900000}
-      # 比最长的用例生成预算多 5 分钟，避免恢复任务重复消费仍在执行的消息。
-      running-timeout-ms: ${AI_GENERATION_RUNNING_TIMEOUT_MS:1380000}
-      max-attempts: ${AI_GENERATION_MAX_ATTEMPTS:3}
-      shutdown-grace-ms: ${AI_GENERATION_SHUTDOWN_GRACE_MS:120000}
-      recovery-interval-ms: 15000
-      rate-limit:
-        per-user-per-hour: ${AI_GENERATION_USER_HOURLY_LIMIT:10}
-        global-per-hour: ${AI_GENERATION_GLOBAL_HOURLY_LIMIT:30}
-      stream:
-        public-key: ${AI_GENERATION_PUBLIC_STREAM_KEY:myoj:ai:generation:public}
-        review-key: ${AI_GENERATION_REVIEW_STREAM_KEY:myoj:ai:generation:review}
-        public-group: ${AI_GENERATION_PUBLIC_STREAM_GROUP:myoj-ai-generation-public}
-        review-group: ${AI_GENERATION_REVIEW_STREAM_GROUP:myoj-ai-generation-review}
-        consumer-prefix: ${AI_GENERATION_CONSUMER_PREFIX:${HOSTNAME:ai-generation}}
-        max-length: 5000
-        reclaim-batch-size: 20
-        ensure-group-interval-ms: 30000
-      sandbox:
-        url: ${CODESANDBOX_URL:http://localhost:8090/executeCode}
-        secret-key: ${CODESANDBOX_SECRET_KEY}
-        connect-timeout-ms: 3000
-        read-timeout-ms: 120000
-        output-limit-bytes: 1048576
+    timeout: 10m
+    max-prompt-length: 2000
+    max-steps: 10
+    memory-size: 16
+    chat:
+      enabled: ${AI_CHAT_ENABLED:true}
+      retention-days: ${AI_CHAT_RETENTION_DAYS:30}
+      timeout: ${AI_CHAT_STREAM_TIMEOUT:30m}
+      max-history-messages: ${AI_CHAT_MAX_HISTORY_MESSAGES:20}
+      max-message-length: 4000
+      max-user-code-length: 40000
+      agent-max-steps: ${AI_CHAT_AGENT_MAX_STEPS:6}
+      agent-max-decision-retries: 2
+      max-observation-chars: 1200
+      archive-cron: ${AI_CHAT_ARCHIVE_CRON:0 0/30 * * * ?}
+    executor:
+      core-size: ${AI_AGENT_CORE_THREADS:2}
+      max-size: ${AI_AGENT_MAX_THREADS:8}
+      queue-capacity: ${AI_AGENT_QUEUE_CAPACITY:50}
+    sandbox:
+      url: ${CODESANDBOX_URL:http://localhost:8090/executeCode}
+      secret-key: ${CODESANDBOX_SECRET_KEY:}
+      connect-timeout: 3s
+      read-timeout: 120s
+      max-cases: 12
+      max-code-length: 40000
+    search:
+      api-url: ${BAIDU_AI_SEARCH_URL:https://qianfan.baidubce.com/v2/ai_search/chat/completions}
+      api-key: ${BAIDU_AI_SEARCH_API_KEY:}
+      timeout: 8s
+      max-results: 5
+    crawler:
+      timeout: 8s
+      max-body-bytes: 512000
+      max-text-length: 12000
+      allowed-hosts:
+        - leetcode.cn
 
 management:
   endpoints:

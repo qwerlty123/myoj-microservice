@@ -5,27 +5,34 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.qwerlty.myojbackendcommon.common.ErrorCode;
 import com.qwerlty.myojbackendcommon.constant.CommonConstant;
+import com.qwerlty.myojbackendcommon.constant.UserConstant;
 import com.qwerlty.myojbackendcommon.exception.BusinessException;
+import com.qwerlty.myojbackendcommon.utils.JwtUtils;
 import com.qwerlty.myojbackendcommon.utils.SqlUtils;
+import com.qwerlty.myojbackendmodel.model.dto.user.UserAddRequest;
 import com.qwerlty.myojbackendmodel.model.dto.user.UserQueryRequest;
+import com.qwerlty.myojbackendmodel.model.dto.user.UserUpdateRequest;
 import com.qwerlty.myojbackendmodel.model.entity.User;
 import com.qwerlty.myojbackendmodel.model.enums.UserRoleEnum;
 import com.qwerlty.myojbackendmodel.model.vo.LoginUserVO;
 import com.qwerlty.myojbackendmodel.model.vo.UserVO;
 import com.qwerlty.myojbackenduserservice.mapper.UserMapper;
 import com.qwerlty.myojbackenduserservice.service.UserService;
+import io.jsonwebtoken.Claims;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.BeanUtils;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.DigestUtils;
 
+import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
-
-import static com.qwerlty.myojbackendcommon.constant.UserConstant.USER_LOGIN_STATE;
 
 
 /**
@@ -41,7 +48,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     /**
      * 盐值，混淆密码
      */
-    public static final String SALT = "yupi";
+    public static final String SALT = "qwerlty";
+
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
 
     @Override
     public long userRegister(String userAccount, String userPassword, String checkPassword) {
@@ -73,12 +83,121 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             User user = new User();
             user.setUserAccount(userAccount);
             user.setUserPassword(encryptPassword);
+            //设置默认用户名称
+            user.setUserName(userAccount);
+            //设置默认头像
+            user.setUserAvatar(UserConstant.DEFAULT_AVATAR);
             boolean saveResult = this.save(user);
             if (!saveResult) {
                 throw new BusinessException(ErrorCode.SYSTEM_ERROR, "注册失败，数据库错误");
             }
             return user.getId();
         }
+    }
+
+    @Override
+    public long userAdd(UserAddRequest userAddRequest) {
+        String userName = userAddRequest.getUserName();
+        String userAccount = userAddRequest.getUserAccount();
+        String userAvatar = userAddRequest.getUserAvatar();
+        String userRole = userAddRequest.getUserRole();
+        String userPassword = userAddRequest.getUserPassword();
+        String checkPassword = userAddRequest.getCheckPassword();
+        String userProfile = userAddRequest.getUserProfile();
+        // 1. 校验
+        if (StringUtils.isAnyBlank(userAccount, userPassword, checkPassword)) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "参数为空");
+        }
+        if (userAccount.length() < 4) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户账号过短");
+        }
+        if (userPassword.length() < 8 || checkPassword.length() < 8) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户密码过短");
+        }
+        if (StringUtils.isBlank(userName)) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户名为空");
+        }
+        if (!(userRole.equals(UserConstant.ADMIN_ROLE) || userRole.equals(UserConstant.DEFAULT_ROLE))) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户角色错误");
+        }
+
+        // 密码和校验密码相同
+        if (!userPassword.equals(checkPassword)) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "两次输入的密码不一致");
+        }
+        synchronized (userAccount.intern()) {
+            // 账户不能重复
+            QueryWrapper<User> queryWrapper = new QueryWrapper<>();
+            queryWrapper.eq("userAccount", userAccount);
+            long count = this.baseMapper.selectCount(queryWrapper);
+            if (count > 0) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "账号重复");
+            }
+            // 2. 加密
+            String encryptPassword = DigestUtils.md5DigestAsHex((SALT + userPassword).getBytes());
+            // 3. 插入数据
+            User user = new User();
+            user.setUserAccount(userAccount);
+            user.setUserPassword(encryptPassword);
+            //设置用户名称
+            user.setUserName(userName);
+            //设置用户角色
+            user.setUserRole(userRole);
+            if (!StringUtils.isBlank(userProfile)&&userProfile.length()<30){
+                user.setUserProfile(userProfile);
+            } else if (StringUtils.isBlank(userProfile)) {
+                //设置个人简介
+                user.setUserProfile(UserConstant.DEFAULT_INTRODUCE);
+            }
+            //设置用户头像
+            if (StringUtils.isNotBlank(userAvatar)) {
+                user.setUserAvatar(userAvatar);
+            } else {
+                user.setUserAvatar(UserConstant.DEFAULT_AVATAR);
+            }
+            boolean saveResult = this.save(user);
+            if (!saveResult) {
+                throw new BusinessException(ErrorCode.SYSTEM_ERROR, "添加用户失败，数据库错误");
+            }
+            return user.getId();
+        }
+    }
+
+    @Override
+    public boolean userUpdate(UserUpdateRequest userUpdateRequest) {
+        Long id = userUpdateRequest.getId();
+        String userName = userUpdateRequest.getUserName();
+        String userAvatar = userUpdateRequest.getUserAvatar();
+        String userProfile = userUpdateRequest.getUserProfile();
+        String userRole = userUpdateRequest.getUserRole();
+        String userPassword = userUpdateRequest.getUserPassword();
+
+        // 3. 插入数据
+        User user = new User();
+        // 1. 校验
+        if (id == null || id <= 0 || StringUtils.isAnyBlank(userRole, userName)) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "id为空");
+        }else {
+            user.setId(id);
+            user.setUserName(userName);
+            user.setUserRole(userRole);
+        }
+        if (!StringUtils.isBlank(userPassword) && userPassword.length() < 8) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "密码错误");
+        }else if (!StringUtils.isBlank(userPassword)){
+            // 2. 加密
+            String encryptPassword = DigestUtils.md5DigestAsHex((SALT + userPassword).getBytes());
+            user.setUserPassword(encryptPassword);
+        }
+        if (!StringUtils.isBlank(userProfile)&&userProfile.length() > 30) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "个人简介过长");
+        }else if(!StringUtils.isBlank(userProfile)){
+            user.setUserProfile(userProfile);
+        }
+        if (UserRoleEnum.getEnumByValue(userRole) ==null) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户角色错误");
+        }
+        return this.updateById(user);
     }
 
     @Override
@@ -105,9 +224,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             log.info("user login failed, userAccount cannot match userPassword");
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户不存在或密码错误");
         }
+        if (user.getUserRole().equals(UserRoleEnum.BAN.getValue())){
+            log.info("该账号已被封禁："+user.getId());
+            throw new BusinessException(ErrorCode.NO_AUTH_ERROR,"该账号已被封禁");
+        }
+        LoginUserVO loginUserVO = this.getLoginUserVO(user);
         // 3. 记录用户的登录态
-        request.getSession().setAttribute(USER_LOGIN_STATE, user);
-        return this.getLoginUserVO(user);
+        String token = JwtUtils.generateToken(loginUserVO.getId(),loginUserVO.getUserRole());
+        loginUserVO.setToken(token);
+        return loginUserVO;
     }
 
     /**
@@ -118,17 +243,19 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
      */
     @Override
     public User getLoginUser(HttpServletRequest request) {
-        // 先判断是否已登录
-        Object userObj = request.getSession().getAttribute(USER_LOGIN_STATE);
-        User currentUser = (User) userObj;
-        if (currentUser == null || currentUser.getId() == null) {
+        String userIdStr = request.getHeader("X-User-Id");
+        if (userIdStr==null || userIdStr.isEmpty()) {
             throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
         }
-        // 从数据库查询（追求性能的话可以注释，直接走缓存）
-        long userId = currentUser.getId();
-        currentUser = this.getById(userId);
+        long userId = Long.parseLong(userIdStr);
+        User currentUser = this.getById(userId);
         if (currentUser == null) {
             throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
+        }
+        if(UserRoleEnum.BAN.getValue().equals(currentUser.getUserRole())){
+            //强制下线
+            boolean b = this.userLogout(request);
+            throw new BusinessException(ErrorCode.NO_AUTH_ERROR,"该账号已被封禁");
         }
         return currentUser;
     }
@@ -141,15 +268,16 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
      */
     @Override
     public User getLoginUserPermitNull(HttpServletRequest request) {
-        // 先判断是否已登录
-        Object userObj = request.getSession().getAttribute(USER_LOGIN_STATE);
-        User currentUser = (User) userObj;
-        if (currentUser == null || currentUser.getId() == null) {
+        String userIdStr = request.getHeader("X-User-Id");
+        if (userIdStr==null || userIdStr.isEmpty()) {
             return null;
         }
-        // 从数据库查询（追求性能的话可以注释，直接走缓存）
-        long userId = currentUser.getId();
-        return this.getById(userId);
+        long userId = Long.parseLong(userIdStr);
+        User currentUser = this.getById(userId);
+        if (currentUser == null) {
+            throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
+        }
+        return currentUser;
     }
 
     /**
@@ -161,9 +289,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Override
     public boolean isAdmin(HttpServletRequest request) {
         // 仅管理员可查询
-        Object userObj = request.getSession().getAttribute(USER_LOGIN_STATE);
-        User user = (User) userObj;
-        return isAdmin(user);
+        User loginUser = getLoginUser(request);
+        String userRoleStr = request.getHeader("X-User-Role");
+        if (userRoleStr==null || userRoleStr.isEmpty()) {
+            throw new BusinessException(ErrorCode.NO_AUTH_ERROR);
+        }
+        return isAdmin(loginUser);
     }
 
     @Override
@@ -178,13 +309,61 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
      */
     @Override
     public boolean userLogout(HttpServletRequest request) {
-        if (request.getSession().getAttribute(USER_LOGIN_STATE) == null) {
-            throw new BusinessException(ErrorCode.OPERATION_ERROR, "未登录");
+        // 1. 从请求头中获取 Token
+        String token = request.getHeader("Authorization");
+        if (StringUtils.isBlank(token) || !token.startsWith("Bearer ")) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "未提供 Token");
         }
-        // 移除登录态
-        request.getSession().removeAttribute(USER_LOGIN_STATE);
+        token = token.substring(7); // 去除 "Bearer " 前缀
+
+        // 2. 解析 Token 获取过期时间（可选）
+        Claims claims = JwtUtils.parseToken(token);
+        Date expiration = claims.getExpiration();
+
+        // 3. 将 Token 加入黑名单（Redis）
+        long ttl = expiration.getTime() - System.currentTimeMillis();
+        if (ttl > 0) {
+            // 使用 Redis 存储黑名单，Key 格式：jwt:blacklist:<token>
+            stringRedisTemplate.opsForValue().set(
+                    "jwt:blacklist:" + token,
+                    "logged_out",
+                    ttl,
+                    TimeUnit.MILLISECONDS
+            );
+        }
+
         return true;
     }
+    /**
+     * 用户注销
+     *
+     */
+    @Override
+    public boolean userLogoutBytoken(String token) {
+        if (StringUtils.isBlank(token) || !token.startsWith("Bearer ")) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "未提供 Token");
+        }
+        token = token.substring(7); // 去除 "Bearer " 前缀
+
+        // 2. 解析 Token 获取过期时间（可选）
+        Claims claims = JwtUtils.parseToken(token);
+        Date expiration = claims.getExpiration();
+
+        // 3. 将 Token 加入黑名单（Redis）
+        long ttl = expiration.getTime() - System.currentTimeMillis();
+        if (ttl > 0) {
+            // 使用 Redis 存储黑名单，Key 格式：jwt:blacklist:<token>
+            stringRedisTemplate.opsForValue().set(
+                    "jwt:blacklist:" + token,
+                    "logged_out",
+                    ttl,
+                    TimeUnit.MILLISECONDS
+            );
+        }
+
+        return true;
+    }
+
 
     @Override
     public LoginUserVO getLoginUserVO(User user) {
@@ -225,6 +404,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         String userName = userQueryRequest.getUserName();
         String userProfile = userQueryRequest.getUserProfile();
         String userRole = userQueryRequest.getUserRole();
+        String userAccount = userQueryRequest.getUserAccount();
         String sortField = userQueryRequest.getSortField();
         String sortOrder = userQueryRequest.getSortOrder();
         QueryWrapper<User> queryWrapper = new QueryWrapper<>();
@@ -234,6 +414,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         queryWrapper.eq(StringUtils.isNotBlank(userRole), "userRole", userRole);
         queryWrapper.like(StringUtils.isNotBlank(userProfile), "userProfile", userProfile);
         queryWrapper.like(StringUtils.isNotBlank(userName), "userName", userName);
+        queryWrapper.like(StringUtils.isNotBlank(userAccount), "userAccount", userAccount);
         queryWrapper.orderBy(SqlUtils.validSortField(sortField), sortOrder.equals(CommonConstant.SORT_ORDER_ASC),
                 sortField);
         return queryWrapper;

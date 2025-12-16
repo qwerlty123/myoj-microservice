@@ -1,4 +1,4 @@
-package com.qwerlty.myojbackendserviceclient.service;
+package com.qwerlty.myojbackendserviceclient.client;
 
 import com.qwerlty.myojbackendmodel.model.entity.QuestionSubmit;
 import org.springframework.cloud.openfeign.FeignClient;

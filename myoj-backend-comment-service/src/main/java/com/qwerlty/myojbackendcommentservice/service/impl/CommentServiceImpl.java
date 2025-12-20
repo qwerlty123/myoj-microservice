@@ -286,6 +286,9 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment>
 //            return new ArrayList<>();
 //        }
         Comment fatherComment = this.getById(commentId);
+        if (fatherComment == null) {
+            return Collections.emptyList();
+        }
         Long questionId = fatherComment.getQuestionId();
         List<Comment> commentList = this.list(new QueryWrapper<Comment>().eq("questionId", questionId));
         if (commentList==null){
@@ -306,8 +309,13 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment>
             return replyVO;
         }).collect(Collectors.toList());
         List<CommentVO> commentVOS = buildCommentTree(commentVOList);
-        Map<Long, CommentVO> collect = commentVOS.stream().collect(Collectors.toMap(CommentVO::getId, c -> c));
-        return collect.get(commentId).getChildren();
+        // 用全部评论 id -> VO 的映射，避免只含根节点时对子评论 id 取不到导致 NPE
+        Map<Long, CommentVO> allMap = commentVOList.stream().collect(Collectors.toMap(CommentVO::getId, c -> c));
+        CommentVO target = allMap.get(commentId);
+        if (target == null) {
+            return Collections.emptyList();
+        }
+        return target.getChildren() != null ? target.getChildren() : Collections.emptyList();
     }
 
     @Override

@@ -13,7 +13,7 @@ import org.springframework.stereotype.Service;
 import javax.annotation.Resource;
 
 /**
- * @author 黄昊
+ * @author 李天宇
  * @version 1.0
  * 专门提供redis基础服务的(提供了通用的能力)
  **/

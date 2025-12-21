@@ -69,6 +69,21 @@ public class QuestionSubmit implements Serializable {
     @TableLogic
     private Integer isDelete;
 
+    /**
+     * 判题重试次数（含补偿重投）
+     */
+    private Integer retryCount;
+
+    /**
+     * 最近一次错误信息
+     */
+    private String lastError;
+
+    /**
+     * 下一次允许重试时间
+     */
+    private Date nextRetryTime;
+
     @TableField(exist = false)
     private static final long serialVersionUID = 1L;
 }

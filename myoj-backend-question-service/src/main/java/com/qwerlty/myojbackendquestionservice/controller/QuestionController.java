@@ -554,7 +554,7 @@ public class QuestionController {
         // 是否告警
         if (count == WARN_COUNT) {
             // 可以改为向管理员发送邮件通知
-            MailUtil.send("3105755134@qq.com", "爬虫告警", "->傻逼用户"+loginUserId+"疑似爬虫",false);
+            MailUtil.send("1787129184@qq.com", "爬虫告警", "->傻逼用户"+loginUserId+"疑似爬虫",false);
             throw new BusinessException(110, "警告访问太频繁");
         }
     }

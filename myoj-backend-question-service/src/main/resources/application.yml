@@ -58,6 +58,8 @@ spring:
     port: 5672
     username: qwerlty
     password: 123
+    publisher-confirm-type: correlated
+    publisher-returns: true   # 开启消息路由失败回调
 
 server:
   address: 0.0.0.0
@@ -103,3 +105,16 @@ codesandbox:
   url: http://localhost:8090/executeCode
   # 与沙箱共享的密钥，用于 API 签名认证，请与沙箱配置保持一致并妥善保管
   secretKey: your-codesandbox-secret-key-change-in-production
+
+# 判题一致性治理（Outbox + 补偿）
+judge-consistency:
+  outbox:
+    dispatch-interval-ms: 3000
+    batch-size: 20
+    max-retry: 8
+  submission:
+    compensate-interval-ms: 15000
+    batch-size: 50
+    max-retry: 3
+    running-timeout-ms: 180000
+    waiting-timeout-ms: 60000

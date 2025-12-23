@@ -25,8 +25,8 @@ spring:
   # todo 需替换配置
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/myoj
-    username: root
+    url: jdbc:mysql://124.221.250.220:3306/myoj
+    username: admin
     password: adgjl08642
   # Redis 配置
   # todo 需替换配置，然后取消注释
@@ -49,16 +49,16 @@ spring:
       max-file-size: 10MB
   cloud:
     nacos:
-      # Nacos 开启鉴权时必填，默认常用为 nacos/nacos
+      # Nacos 开启鉴权时必填
       username: nacos
-      password: nacos
+      password: adgjl08642
       discovery:
-        server-addr: 192.168.249.129:8848
+        server-addr: 124.221.250.220:8848
   rabbitmq:
-    host: 192.168.249.129
+    host: 124.221.250.220
     port: 5672
-    username: qwerlty
-    password: 123
+    username: admin
+    password: adgjl08642
 server:
   address: 0.0.0.0
   port: 8104
@@ -102,4 +102,23 @@ codesandbox:
   # 远程沙箱地址（使用 remote 时生效）
   url: http://localhost:8090/executeCode
   # 与沙箱共享的密钥，用于 API 签名认证，请与沙箱配置保持一致并妥善保管
-  secretKey: your-codesandbox-secret-key-change-in-production
+  secretKey: adgjl08642
+
+management:
+  # 当前部署未启用 Elasticsearch，避免 Actuator 探测本机 9200 导致健康状态告警。
+  health:
+    elasticsearch:
+      enabled: false
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true

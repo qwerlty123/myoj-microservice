@@ -39,5 +39,7 @@ public interface JudgeTaskOutboxMapper extends BaseMapper<JudgeTaskOutbox> {
     @Update("UPDATE judge_task_outbox SET status = 0, updateTime = NOW() " +
             "WHERE status = 3 AND updateTime < #{deadline}")
     int releaseStaleDispatching(@Param("deadline") Date deadline);
-}
 
+    @Select("SELECT COUNT(1) FROM judge_task_outbox WHERE status = #{status}")
+    long countByStatus(@Param("status") int status);
+}

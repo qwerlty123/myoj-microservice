@@ -2,9 +2,9 @@ spring:
   cloud:
     nacos:
       username: nacos
-      password: nacos
+      password: adgjl08642
       discovery:
-        server-addr: 192.168.249.129:8848
+        server-addr: 124.221.250.220:8848
     gateway:
       routes:
         - id: myoj-backend-user-service
@@ -24,7 +24,7 @@ spring:
           predicates:
             - Path=/api/comment/**
   redis:
-    host: 192.168.249.129
+    host: 124.221.250.220
     port: 6379
     password: adgjl08642
     lettuce:
@@ -50,3 +50,22 @@ knife4j:
       enabled: true
       # ④ 第四行配置，聚合子服务全部为Swagger2规范的文档
       version: swagger2
+
+management:
+  # 当前部署未启用 Elasticsearch，避免 Actuator 探测本机 9200 导致健康状态告警。
+  health:
+    elasticsearch:
+      enabled: false
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true

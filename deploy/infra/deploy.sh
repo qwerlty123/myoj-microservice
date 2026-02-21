@@ -39,7 +39,7 @@ fi
 required_secret_vars=(
   MYSQL_PASSWORD MYSQL_ROOT_PASSWORD REDIS_PASSWORD
   NACOS_ADMIN_PASSWORD RABBITMQ_DEFAULT_PASS MINIO_ROOT_PASSWORD CODESANDBOX_SECRET_KEY
-  AI_INTERNAL_TOKEN GATEWAY_TRUST_TOKEN QDRANT_API_KEY
+  AI_CHAT_API_KEY GATEWAY_TRUST_TOKEN
 )
 for secret_name in "${required_secret_vars[@]}"; do
   secret_value="${!secret_name:-}"
@@ -73,19 +73,12 @@ wait_until() {
   return 1
 }
 
-"${COMPOSE[@]}" pull mysql redis nacos rabbitmq qdrant minio minio-init
+"${COMPOSE[@]}" pull mysql redis nacos rabbitmq minio minio-init
 "${COMPOSE[@]}" up -d
 
 wait_until MySQL 40 "${COMPOSE[@]}" exec -T mysql mysqladmin ping -h 127.0.0.1 -uroot "-p${MYSQL_ROOT_PASSWORD}" --silent
 wait_until Redis 30 "${COMPOSE[@]}" exec -T redis redis-cli --no-auth-warning -a "${REDIS_PASSWORD}" ping
 wait_until RabbitMQ 40 "${COMPOSE[@]}" exec -T rabbitmq rabbitmq-diagnostics -q ping
-wait_until Qdrant 30 curl --fail --silent "http://127.0.0.1:${QDRANT_HTTP_PORT}/healthz"
-if ! curl --fail --silent --show-error --max-time 5 \
-    --header "api-key: ${QDRANT_API_KEY}" \
-    "http://127.0.0.1:${QDRANT_HTTP_PORT}/collections" >/dev/null; then
-  printf 'Qdrant API-key authentication failed. Check QDRANT_API_KEY and the container logs.\n' >&2
-  exit 1
-fi
 wait_until MinIO 30 curl --fail --silent "http://127.0.0.1:${MINIO_PORT}/minio/health/live"
 wait_until Nacos 60 curl --fail --silent "http://127.0.0.1:${NACOS_PORT}/nacos/v1/console/health/liveness"
 

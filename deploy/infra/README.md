@@ -5,7 +5,7 @@
 ```text
 本机进程：Gateway、User、Question、Judge、Comment、AI Service
 服务器进程：Code Sandbox（systemd，内部使用受限 Docker 容器执行代码）
-服务器 Docker：MySQL、Redis、Nacos、RabbitMQ、Qdrant、MinIO
+服务器 Docker：MySQL、Redis、Nacos、RabbitMQ、MinIO
 ```
 
 中间件部署本身不需要上传 MyOJ 项目。Code Sandbox 由 `myoj-codesandbox/scripts/deploy-server.sh` 单独部署，不属于本目录的 Docker Compose。
@@ -22,7 +22,6 @@
 | Redis | 7.4 | 使用 Spring Data Redis，未锁定服务端版本 |
 | Nacos | 2.5.1 | Spring Cloud Alibaba 2021.0.5.0 客户端，未锁定服务端版本 |
 | RabbitMQ | 4.1 | 使用 Spring AMQP，未锁定服务端版本 |
-| Qdrant | 1.15 | AI Service 通过 Spring AI Qdrant VectorStore 使用 |
 | MinIO | 固定日期版本 | Java SDK 8.5.9，未锁定 MinIO 服务端版本 |
 
 这些版本按当前项目依赖和配置选择，可以正常对接；如果你希望完全复刻以前虚拟机环境，需要提供以前的镜像标签或安装版本，再将 `.env` 中的 `*_IMAGE` 改成对应版本。
@@ -35,7 +34,6 @@
 docker-compose.yml
 .env.example
 deploy.sh
-deploy-qdrant.sh
 generate-nacos-internal-env.sh
 status.sh
 backup.sh
@@ -68,15 +66,18 @@ RABBITMQ_DEFAULT_PASS=adgjl08642
 MINIO_ROOT_PASSWORD=adgjl08642
 CODESANDBOX_SECRET_KEY=adgjl08642
 CODESANDBOX_HOST=124.221.250.220
-AI_INTERNAL_TOKEN=请替换为足够长的随机字符串
 GATEWAY_TRUST_TOKEN=请替换为另一组足够长的随机字符串
-QDRANT_API_KEY=请替换为另一组足够长的随机字符串
+AI_CHAT_API_KEY=你的模型服务密钥
+AI_CHAT_BASE_URL=https://api.deepseek.com
+AI_CHAT_MODEL=deepseek-v4-flash
+AI_CHAT_ENABLED=true
+AI_CHAT_RETENTION_DAYS=30
+AI_CHAT_AGENT_MAX_STEPS=6
+AI_CHAT_STREAM_TIMEOUT=30m
 ```
 
-公开 AI 出题前，还必须将 `AI_GENERATION_PUBLIC_ENABLED` 设为 `true`，并显式配置
-`AI_MODEL_PUBLIC_CONCURRENCY`、`AI_MODEL_REVIEW_CONCURRENCY`、两个分流的每日预算以及模型输入/输出单价。
-任一值为 `0` 时 AI Service 会拒绝以公开模式启动。
-即使公共功能关闭，生产环境的管理员创作/质检也会消耗模型费用，因此上述两个分流仍必须完整配置。
+AI Service 现在只提供目标项目风格的同步 ReAct 出题接口。若需要 `webSearch` 工具，再额外填写
+`BAIDU_AI_SEARCH_API_KEY`；不填写时 Agent 会跳过搜索并继续生成。
 
 当前配置使用 `admin` 作为 MySQL、RabbitMQ 和 MinIO 的业务账号；`MYSQL_USER` 不能填写 `root`。`root` 账号只由 `MYSQL_ROOT_PASSWORD` 配置。
 
@@ -87,15 +88,7 @@ chmod +x /opt/myoj-infra/*.sh
 /opt/myoj-infra/deploy.sh
 ```
 
-如果 MySQL、Redis 等基础设施已经部署，只需要单独部署 RAG 向量库，可以执行：
-
-```bash
-/opt/myoj-infra/deploy-qdrant.sh
-```
-
-这个单独脚本只读取 `.env` 中的 Qdrant 配置，不依赖 Nacos 的 `.env.internal`，也不会启动或重启其他中间件。
-
-完整部署脚本和单独的 Qdrant 脚本都会等待健康检查，并验证 `QDRANT_API_KEY` 可以访问集合 API。脚本还会生成：
+完整部署脚本会等待各中间件健康检查，并生成：
 
 - `.env.internal`：Nacos 内部 JWT 签名密钥，不是登录密码，无需手动填写；
 - `local-dev.env`：本机微服务使用的服务器公网连接配置。
@@ -138,7 +131,7 @@ source ./local-dev.env
 set +a
 ```
 
-这一步只把服务器连接参数注入本机进程，不会把后端代码上传到服务器。Judge Service 会通过 `CODESANDBOX_URL` 调用远程沙箱；AI Service 会使用其中的 Qdrant 配置连接远程 RAG 数据库。
+这一步只把服务器连接参数注入本机进程，不会把后端代码上传到服务器。Judge Service 和 AI Service 都会通过 `CODESANDBOX_URL` 调用远程沙箱；AI Service 还会读取模型配置。
 
 生成的配置指向：
 
@@ -147,7 +140,6 @@ MySQL      服务器公网IP:3306
 Redis      服务器公网IP:6379
 Nacos      服务器公网IP:8848
 RabbitMQ   服务器公网IP:5672
-Qdrant     服务器公网IP:6333/6334
 MinIO      服务器公网IP:9002
 CodeSandbox 服务器公网IP:8090
 ```
@@ -159,7 +151,7 @@ CodeSandbox 服务器公网IP:8090
 云安全组放行 TCP：
 
 ```text
-3306, 5672, 6333-6334, 6379, 8090, 8848, 9002-9003, 9848-9849, 15672, 15692
+3306, 5672, 6379, 8090, 8848, 9002-9003, 9848-9849, 15672, 15692
 ```
 
 8090 只需放行给运行 Judge Service 的出口 IP；不要向整个公网开放代码执行入口。`/executeCode` 仍使用时间戳和 HMAC 签名认证。
@@ -168,10 +160,7 @@ CodeSandbox 服务器公网IP:8090
 
 - Nacos：`http://服务器公网IP:8848/nacos`
 - RabbitMQ：`http://服务器公网IP:15672`
-- Qdrant：`http://服务器公网IP:6333/dashboard`
 - MinIO：`http://服务器公网IP:9003`
-
-Qdrant 的 HTTP/gRPC 端口使用 `QDRANT_API_KEY` 做 API Key 鉴权，AI Service 需要配置同一个 `QDRANT_API_KEY`。生产环境建议只开放给应用服务器安全组，或在 TLS 反向代理后提供公网访问。
 
 ## 7. 日常操作
 

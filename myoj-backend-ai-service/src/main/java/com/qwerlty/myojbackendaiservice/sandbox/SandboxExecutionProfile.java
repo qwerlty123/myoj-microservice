@@ -1,14 +1,17 @@
 package com.qwerlty.myojbackendaiservice.sandbox;
 
-import lombok.AllArgsConstructor;
-import lombok.Data;
+public record SandboxExecutionProfile(
+        String purpose,
+        Long timeLimitMs,
+        Long memoryLimitKb,
+        Long stackLimitKb,
+        Integer outputLimitBytes
+) {
+    public static SandboxExecutionProfile aiValidation() {
+        return new SandboxExecutionProfile("AI_VALIDATION", 5_000L, 262_144L, 131_072L, 1_048_576);
+    }
 
-@Data
-@AllArgsConstructor
-public class SandboxExecutionProfile {
-    private String purpose;
-    private Long timeLimitMs;
-    private Long memoryLimitKb;
-    private Long stackLimitKb;
-    private Integer outputLimitBytes;
+    public static SandboxExecutionProfile aiTutor() {
+        return new SandboxExecutionProfile("AI_TUTOR", 5_000L, 262_144L, 131_072L, 1_048_576);
+    }
 }

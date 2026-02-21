@@ -39,13 +39,13 @@ docker cp myoj-redis:/data/dump.rdb "${BACKUP_DIR}/redis-dump.rdb" >/dev/null
 services_stopped=0
 restart_stateful_services() {
   if [[ "${services_stopped}" == "1" ]]; then
-    "${COMPOSE[@]}" start nacos minio qdrant >/dev/null
+    "${COMPOSE[@]}" start nacos minio >/dev/null
   fi
 }
 trap restart_stateful_services EXIT
 
-printf 'Briefly stopping Nacos, MinIO and Qdrant for consistent volume archives...\n'
-"${COMPOSE[@]}" stop nacos minio qdrant >/dev/null
+printf 'Briefly stopping Nacos and MinIO for consistent volume archives...\n'
+"${COMPOSE[@]}" stop nacos minio >/dev/null
 services_stopped=1
 
 docker run --rm \
@@ -57,11 +57,6 @@ docker run --rm \
   -v myoj-minio-data:/source:ro \
   -v "${BACKUP_DIR}:/backup" \
   alpine:3.20 tar -czf /backup/minio-data.tar.gz -C /source .
-
-docker run --rm \
-  -v myoj-qdrant-data:/source:ro \
-  -v "${BACKUP_DIR}:/backup" \
-  alpine:3.20 tar -czf /backup/qdrant-data.tar.gz -C /source .
 
 restart_stateful_services
 services_stopped=0

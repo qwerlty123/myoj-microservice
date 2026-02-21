@@ -1,10 +1,7 @@
 package com.qwerlty.myojbackendaiservice.sandbox;
 
-import lombok.Data;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
-@Data
-public class SandboxJudgeInfo {
-    private String message;
-    private Long memory;
-    private Long time;
+@JsonIgnoreProperties(ignoreUnknown = true)
+public record SandboxJudgeInfo(String message, Long memory, Long time) {
 }

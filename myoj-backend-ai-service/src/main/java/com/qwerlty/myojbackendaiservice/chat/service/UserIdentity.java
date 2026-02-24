@@ -18,6 +18,14 @@ public final class UserIdentity {
         throw ApiException.unauthorized("未登录或网关用户身份无效");
     }
 
+    public static long requireAdminUserId(HttpServletRequest request) {
+        long userId = requireUserId(request);
+        if (!"admin".equalsIgnoreCase(request.getHeader("X-User-Role"))) {
+            throw ApiException.forbidden("仅管理员可以使用 AI 出题任务");
+        }
+        return userId;
+    }
+
     private UserIdentity() {
     }
 }

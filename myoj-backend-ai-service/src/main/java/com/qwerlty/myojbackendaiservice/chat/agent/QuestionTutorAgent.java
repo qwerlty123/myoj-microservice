@@ -11,6 +11,7 @@ import com.qwerlty.myojbackendaiservice.chat.tools.TutorAgentTools;
 import com.qwerlty.myojbackendaiservice.chat.tools.TutorToolContext;
 import com.qwerlty.myojbackendaiservice.chat.tools.TutorToolService;
 import com.qwerlty.myojbackendaiservice.config.AiAgentProperties;
+import com.qwerlty.myojbackendaiservice.observability.AiMetrics;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -24,6 +25,9 @@ import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -32,6 +36,8 @@ import java.util.List;
 
 @Component
 public class QuestionTutorAgent {
+
+    private static final Logger log = LoggerFactory.getLogger(QuestionTutorAgent.class);
 
     private static final String DEFAULT_NORMAL_PROMPT = """
             你是 MyOJ 的算法题辅导助手。结合题面、用户代码、判题结果和历史对话回答。
@@ -54,18 +60,24 @@ public class QuestionTutorAgent {
     private final TutorToolService toolService;
     private final AiAgentProperties.Chat properties;
     private final ObjectMapper objectMapper;
+    private final AiMetrics metrics;
+    private final String configuredModel;
     private final ToolCallingManager toolCallingManager = ToolCallingManager.builder().build();
 
     public QuestionTutorAgent(ChatModel chatModel,
                               AiChatRepository repository,
                               TutorToolService toolService,
                               AiAgentProperties properties,
-                              ObjectMapper objectMapper) {
+                              ObjectMapper objectMapper,
+                              AiMetrics metrics,
+                              @Value("${spring.ai.openai.chat.options.model:}") String configuredModel) {
         this.chatClient = ChatClient.builder(chatModel).build();
         this.repository = repository;
         this.toolService = toolService;
         this.properties = properties.getChat();
         this.objectMapper = objectMapper;
+        this.metrics = metrics;
+        this.configuredModel = configuredModel;
     }
 
     public TutorAnswer answer(long userId,
@@ -75,11 +87,18 @@ public class QuestionTutorAgent {
                               List<AiChatMessage> history,
                               ChatEventSink sink) {
         ChatMode mode = request.resolvedMode();
+        AiChatRepository.PromptDefinition prompt = promptDefinition(mode);
+        String modelName = repository.findActiveModelName().filter(StringUtils::hasText)
+                .orElse(configuredModel);
+        UsageCounter usage = new UsageCounter();
         if (mode == ChatMode.AGENT) {
-            return agentAnswer(userId, session, question, request, history, sink);
+            return agentAnswer(userId, session, question, request, history, sink,
+                    prompt, modelName, usage);
         }
-        String answer = completeAnswer(systemPrompt(ChatMode.NORMAL), question, request, history, "", sink);
-        return new TutorAnswer(fallback(answer, sink), List.of());
+        String answer = completeAnswer(prompt.content(), question, request, history, "", sink,
+                modelName, usage);
+        return new TutorAnswer(fallback(answer, sink), List.of(), modelName, prompt.version(),
+                usage.promptTokens(), usage.completionTokens());
     }
 
     private TutorAnswer agentAnswer(long userId,
@@ -87,14 +106,17 @@ public class QuestionTutorAgent {
                                     QuestionContext question,
                                     AiChatSendRequest request,
                                     List<AiChatMessage> history,
-                                    ChatEventSink sink) {
+                                    ChatEventSink sink,
+                                    AiChatRepository.PromptDefinition promptDefinition,
+                                    String modelName,
+                                    UsageCounter usage) {
         TutorToolContext toolContext = new TutorToolContext(userId, session.id(), question, request);
         TutorAgentTools tools = new TutorAgentTools(
                 toolService, objectMapper, toolContext, properties.getMaxObservationChars(), sink);
         ToolCallback[] callbacks = ToolCallbacks.from(tools);
-        OpenAiChatOptions options = agentModelOptions(callbacks);
+        OpenAiChatOptions options = agentModelOptions(callbacks, modelName);
         List<Message> conversation = new ArrayList<>();
-        conversation.add(new SystemMessage(systemPrompt(ChatMode.AGENT) + "\n" + TOOL_CALLING_PROMPT));
+        conversation.add(new SystemMessage(promptDefinition.content() + "\n" + TOOL_CALLING_PROMPT));
         for (AiChatMessage message : history) {
             if ("assistant".equalsIgnoreCase(message.role())) {
                 conversation.add(new AssistantMessage(message.content()));
@@ -107,9 +129,17 @@ public class QuestionTutorAgent {
         for (int step = 1; step <= Math.max(1, properties.getAgentMaxSteps()); step++) {
             Prompt prompt = new Prompt(conversation, options);
             ChatResponse response;
+            long startedAt = System.currentTimeMillis();
             try {
                 response = chatClient.prompt(prompt).call().chatResponse();
-            } catch (Exception ignored) {
+                usage.add(response);
+                metrics.recordModelCall("tutor_agent_step", "success",
+                        System.currentTimeMillis() - startedAt);
+            } catch (Exception exception) {
+                metrics.recordModelCall("tutor_agent_step", "error",
+                        System.currentTimeMillis() - startedAt);
+                log.warn("AI tutor agent model call failed at step {} type={}: {}", step,
+                        exception.getClass().getSimpleName(), concise(exception.getMessage()));
                 break;
             }
             if (response == null || response.getResult() == null) {
@@ -119,21 +149,26 @@ public class QuestionTutorAgent {
             if (assistant.getToolCalls().isEmpty()) {
                 String finalAnswer = assistant.getText();
                 if (sink != null) {
-                    finalAnswer = completeAnswer(systemPrompt(ChatMode.AGENT), question, request, history,
-                            tools.observations() + "\n候选结论：" + blank(finalAnswer), sink);
+                    finalAnswer = completeAnswer(promptDefinition.content(), question, request, history,
+                            tools.observations() + "\n候选结论：" + blank(finalAnswer), sink,
+                            modelName, usage);
                 }
-                return new TutorAnswer(fallback(finalAnswer, sink), tools.events());
+                return new TutorAnswer(fallback(finalAnswer, sink), tools.events(), modelName,
+                        promptDefinition.version(), usage.promptTokens(), usage.completionTokens());
             }
             try {
                 ToolExecutionResult execution = toolCallingManager.executeToolCalls(prompt, response);
                 conversation = new ArrayList<>(execution.conversationHistory());
-            } catch (Exception ignored) {
+            } catch (Exception exception) {
+                log.warn("AI tutor tool execution failed at step {} type={}: {}", step,
+                        exception.getClass().getSimpleName(), concise(exception.getMessage()));
                 break;
             }
         }
-        String answer = completeAnswer(systemPrompt(ChatMode.AGENT), question, request, history,
-                tools.observations(), sink);
-        return new TutorAnswer(fallback(answer, sink), tools.events());
+        String answer = completeAnswer(promptDefinition.content(), question, request, history,
+                tools.observations(), sink, modelName, usage);
+        return new TutorAnswer(fallback(answer, sink), tools.events(), modelName,
+                promptDefinition.version(), usage.promptTokens(), usage.completionTokens());
     }
 
     private String completeAnswer(String systemPrompt,
@@ -141,7 +176,9 @@ public class QuestionTutorAgent {
                                   AiChatSendRequest request,
                                   List<AiChatMessage> history,
                                   String observations,
-                                  ChatEventSink sink) {
+                                  ChatEventSink sink,
+                                  String modelName,
+                                  UsageCounter usage) {
         List<Message> messages = new ArrayList<>();
         messages.add(new SystemMessage(systemPrompt));
         for (AiChatMessage message : history) {
@@ -152,43 +189,61 @@ public class QuestionTutorAgent {
             }
         }
         messages.add(new UserMessage(userContext(question, request, observations)));
-        Prompt prompt = new Prompt(messages, modelOptions());
+        Prompt prompt = new Prompt(messages, modelOptions(modelName));
+        long startedAt = System.currentTimeMillis();
         try {
             if (sink == null) {
-                return chatClient.prompt(prompt).call().content();
+                ChatResponse response = chatClient.prompt(prompt).call().chatResponse();
+                usage.add(response);
+                metrics.recordModelCall("tutor_final", "success",
+                        System.currentTimeMillis() - startedAt);
+                return response == null || response.getResult() == null
+                        ? "" : blank(response.getResult().getOutput().getText());
             }
             StringBuilder value = new StringBuilder();
-            chatClient.prompt(prompt).stream().content().doOnNext(chunk -> {
+            int[] streamedUsage = new int[2];
+            chatClient.prompt(prompt).stream().chatResponse().doOnNext(response -> {
+                observeUsage(response, streamedUsage);
+                String chunk = response == null || response.getResult() == null
+                        ? "" : response.getResult().getOutput().getText();
                 if (StringUtils.hasText(chunk)) {
                     value.append(chunk);
                     sink.emit("delta", chunk);
                 }
             }).blockLast();
+            usage.add(streamedUsage[0], streamedUsage[1]);
+            metrics.recordModelCall("tutor_final", "success",
+                    System.currentTimeMillis() - startedAt);
             return value.toString();
         } catch (Exception exception) {
+            metrics.recordModelCall("tutor_final", "error",
+                    System.currentTimeMillis() - startedAt);
+            log.warn("AI tutor final answer failed type={}: {}", exception.getClass().getSimpleName(),
+                    concise(exception.getMessage()));
             return "";
         }
     }
 
-    private OpenAiChatOptions modelOptions() {
+    private OpenAiChatOptions modelOptions(String modelName) {
         OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder().temperature(0.2);
-        repository.findActiveModelName().filter(StringUtils::hasText).ifPresent(builder::model);
+        if (StringUtils.hasText(modelName)) builder.model(modelName);
         return builder.build();
     }
 
-    private OpenAiChatOptions agentModelOptions(ToolCallback[] callbacks) {
+    private OpenAiChatOptions agentModelOptions(ToolCallback[] callbacks, String modelName) {
         OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
                 .temperature(0.2)
                 .toolCallbacks(callbacks)
                 .internalToolExecutionEnabled(false);
-        repository.findActiveModelName().filter(StringUtils::hasText).ifPresent(builder::model);
+        if (StringUtils.hasText(modelName)) builder.model(modelName);
         return builder.build();
     }
 
-    private String systemPrompt(ChatMode mode) {
-        return repository.findActivePrompt(mode.value())
-                .filter(StringUtils::hasText)
-                .orElse(mode == ChatMode.AGENT ? DEFAULT_AGENT_PROMPT : DEFAULT_NORMAL_PROMPT);
+    private AiChatRepository.PromptDefinition promptDefinition(ChatMode mode) {
+        return repository.findActivePromptDefinition(mode.value())
+                .filter(prompt -> StringUtils.hasText(prompt.content()))
+                .orElse(new AiChatRepository.PromptDefinition("builtin-v1",
+                        mode == ChatMode.AGENT ? DEFAULT_AGENT_PROMPT : DEFAULT_NORMAL_PROMPT));
     }
 
     private String userContext(QuestionContext question, AiChatSendRequest request, String observations) {
@@ -233,5 +288,42 @@ public class QuestionTutorAgent {
             return "";
         }
         return value.length() <= maxLength ? value : value.substring(0, maxLength);
+    }
+
+    private static void observeUsage(ChatResponse response, int[] totals) {
+        if (response == null || response.getMetadata() == null || response.getMetadata().getUsage() == null) return;
+        Integer prompt = response.getMetadata().getUsage().getPromptTokens();
+        Integer completion = response.getMetadata().getUsage().getCompletionTokens();
+        if (prompt != null) totals[0] = Math.max(totals[0], prompt);
+        if (completion != null) totals[1] = Math.max(totals[1], completion);
+    }
+
+    private static String concise(String value) {
+        if (!StringUtils.hasText(value)) return "unknown";
+        return value.length() <= 300 ? value : value.substring(0, 300);
+    }
+
+    private static final class UsageCounter {
+        private int promptTokens;
+        private int completionTokens;
+
+        void add(ChatResponse response) {
+            int[] value = new int[2];
+            observeUsage(response, value);
+            add(value[0], value[1]);
+        }
+
+        void add(int prompt, int completion) {
+            promptTokens += Math.max(0, prompt);
+            completionTokens += Math.max(0, completion);
+        }
+
+        Integer promptTokens() {
+            return promptTokens == 0 ? null : promptTokens;
+        }
+
+        Integer completionTokens() {
+            return completionTokens == 0 ? null : completionTokens;
+        }
     }
 }

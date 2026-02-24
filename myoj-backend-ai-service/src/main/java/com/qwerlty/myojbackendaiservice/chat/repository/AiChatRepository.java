@@ -28,7 +28,8 @@ public class AiChatRepository {
             lastMessageTime, expireTime, createTime, updateTime
             """;
     private static final String MESSAGE_COLUMNS = """
-            id, sessionId, role, mode, content, toolEvents, violation, createTime
+            id, sessionId, role, mode, content, toolEvents, violation, traceId, modelName,
+            promptVersion, latencyMs, promptTokens, completionTokens, createTime
             """;
 
     private final JdbcTemplate jdbcTemplate;
@@ -96,14 +97,15 @@ public class AiChatRepository {
     }
 
     public AiChatMessage saveMessage(long sessionId, String role, String mode, String content,
-                                     String toolEvents, boolean violation) {
+                                     String toolEvents, boolean violation, MessageMetadata metadata) {
         LocalDateTime now = LocalDateTime.now();
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbcTemplate.update(connection -> {
             PreparedStatement statement = connection.prepareStatement("""
                     INSERT INTO ai_chat_message
-                    (sessionId, role, mode, content, toolEvents, violation, createTime, isDelete)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                    (sessionId, role, mode, content, toolEvents, violation, traceId, modelName,
+                     promptVersion, latencyMs, promptTokens, completionTokens, createTime, isDelete)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                     """, Statement.RETURN_GENERATED_KEYS);
             statement.setLong(1, sessionId);
             statement.setString(2, role);
@@ -111,14 +113,26 @@ public class AiChatRepository {
             statement.setString(4, content);
             statement.setString(5, toolEvents);
             statement.setBoolean(6, violation);
-            statement.setTimestamp(7, Timestamp.valueOf(now));
+            statement.setString(7, metadata == null ? null : metadata.traceId());
+            statement.setString(8, metadata == null ? null : metadata.modelName());
+            statement.setString(9, metadata == null ? null : metadata.promptVersion());
+            statement.setObject(10, metadata == null ? null : metadata.latencyMs());
+            statement.setObject(11, metadata == null ? null : metadata.promptTokens());
+            statement.setObject(12, metadata == null ? null : metadata.completionTokens());
+            statement.setTimestamp(13, Timestamp.valueOf(now));
             return statement;
         }, keyHolder);
         Number key = keyHolder.getKey();
         if (key == null) {
             throw new IllegalStateException("AI 消息写入后没有返回主键");
         }
-        return new AiChatMessage(key.longValue(), sessionId, role, mode, content, toolEvents, violation, now);
+        return new AiChatMessage(key.longValue(), sessionId, role, mode, content, toolEvents, violation,
+                metadata == null ? null : metadata.traceId(),
+                metadata == null ? null : metadata.modelName(),
+                metadata == null ? null : metadata.promptVersion(),
+                metadata == null ? null : metadata.latencyMs(),
+                metadata == null ? null : metadata.promptTokens(),
+                metadata == null ? null : metadata.completionTokens(), now);
     }
 
     @Transactional
@@ -135,10 +149,13 @@ public class AiChatRepository {
 
     @Transactional
     public AiChatMessage saveRound(long sessionId, ChatMode mode, String userContent,
-                                   String assistantContent, String toolEvents, int retentionDays) {
-        saveMessage(sessionId, "user", mode.value(), userContent, null, false);
+                                   String assistantContent, String toolEvents, int retentionDays,
+                                   MessageMetadata metadata) {
+        MessageMetadata userMetadata = metadata == null ? null
+                : new MessageMetadata(metadata.traceId(), null, null, null, null, null);
+        saveMessage(sessionId, "user", mode.value(), userContent, null, false, userMetadata);
         AiChatMessage assistant = saveMessage(
-                sessionId, "assistant", mode.value(), assistantContent, toolEvents, false);
+                sessionId, "assistant", mode.value(), assistantContent, toolEvents, false, metadata);
         touchSession(sessionId, mode, retentionDays);
         return assistant;
     }
@@ -169,11 +186,17 @@ public class AiChatRepository {
     }
 
     public Optional<String> findActivePrompt(String scene) {
+        return findActivePromptDefinition(scene).map(PromptDefinition::content);
+    }
+
+    public Optional<PromptDefinition> findActivePromptDefinition(String scene) {
         return jdbcTemplate.query("""
-                        SELECT promptContent FROM ai_prompt_config
+                        SELECT versionNo, promptContent FROM ai_prompt_config
                         WHERE scene = ? AND enabled = 1 AND isActive = 1 AND isDelete = 0
                         ORDER BY versionNo DESC, id DESC LIMIT 1
-                        """, (rs, rowNum) -> rs.getString(1), scene).stream().findFirst();
+                        """, (rs, rowNum) -> new PromptDefinition(
+                        "db-v" + rs.getInt("versionNo"), rs.getString("promptContent")), scene)
+                .stream().findFirst();
     }
 
     public Optional<String> findActiveModelName() {
@@ -267,6 +290,12 @@ public class AiChatRepository {
             rs.getString("content"),
             rs.getString("toolEvents"),
             rs.getBoolean("violation"),
+            rs.getString("traceId"),
+            rs.getString("modelName"),
+            rs.getString("promptVersion"),
+            nullableLong(rs.getObject("latencyMs")),
+            nullableInteger(rs.getObject("promptTokens")),
+            nullableInteger(rs.getObject("completionTokens")),
             toLocalDateTime(rs.getTimestamp("createTime"))
     );
 
@@ -278,5 +307,16 @@ public class AiChatRepository {
     }
 
     public record ToolPolicy(boolean enabled, int dailyLimit) {
+    }
+
+    public record PromptDefinition(String version, String content) {
+    }
+
+    public record MessageMetadata(String traceId, String modelName, String promptVersion,
+                                  Long latencyMs, Integer promptTokens, Integer completionTokens) {
+    }
+
+    private static Integer nullableInteger(Object value) {
+        return value instanceof Number number ? number.intValue() : null;
     }
 }

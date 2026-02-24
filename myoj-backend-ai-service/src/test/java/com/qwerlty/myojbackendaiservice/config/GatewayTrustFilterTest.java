@@ -15,7 +15,7 @@ class GatewayTrustFilterTest {
     @Test
     void rejectsRequestsWithoutTheGatewayToken() throws ServletException, IOException {
         GatewayTrustFilter filter = new GatewayTrustFilter("trusted");
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/ai/create/question");
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/ai/generation/tasks/problem-drafts");
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         filter.doFilter(request, response, new MockFilterChain());
@@ -26,7 +26,7 @@ class GatewayTrustFilterTest {
     @Test
     void forwardsRequestsWithTheGatewayToken() throws ServletException, IOException {
         GatewayTrustFilter filter = new GatewayTrustFilter("trusted");
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/ai/create/question");
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/ai/generation/tasks/problem-drafts");
         request.addHeader("X-Gateway-Token", "trusted");
         MockHttpServletResponse response = new MockHttpServletResponse();
 

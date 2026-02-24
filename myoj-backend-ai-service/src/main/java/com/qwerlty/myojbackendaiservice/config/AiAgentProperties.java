@@ -15,6 +15,7 @@ public class AiAgentProperties {
     private int memorySize = 16;
     private final Executor executor = new Executor();
     private final Chat chat = new Chat();
+    private final Authoring authoring = new Authoring();
     private final Sandbox sandbox = new Sandbox();
     private final Search search = new Search();
     private final Crawler crawler = new Crawler();
@@ -57,6 +58,10 @@ public class AiAgentProperties {
 
     public Chat getChat() {
         return chat;
+    }
+
+    public Authoring getAuthoring() {
+        return authoring;
     }
 
     public Sandbox getSandbox() {
@@ -108,7 +113,7 @@ public class AiAgentProperties {
         private int maxHistoryMessages = 20;
         private int maxMessageLength = 4_000;
         private int maxUserCodeLength = 40_000;
-        private int agentMaxSteps = 6;
+        private int agentMaxSteps = 4;
         private int agentMaxDecisionRetries = 2;
         private int maxObservationChars = 1_200;
         private String archiveCron = "0 0/30 * * * ?";
@@ -191,6 +196,116 @@ public class AiAgentProperties {
 
         public void setArchiveCron(String archiveCron) {
             this.archiveCron = archiveCron;
+        }
+    }
+
+    public static class Authoring {
+        private boolean enabled = true;
+        private int maxRepairCount = 3;
+        private Duration staleAfter = Duration.ofMinutes(3);
+        private String recoveryCron = "0 */1 * * * ?";
+        private int pageSizeLimit = 50;
+        private String graphVersion = "authoring-v1";
+        private String promptVersion = "authoring-v1";
+        private final RedisCheckpoint checkpoint = new RedisCheckpoint();
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public int getMaxRepairCount() {
+            return maxRepairCount;
+        }
+
+        public void setMaxRepairCount(int maxRepairCount) {
+            this.maxRepairCount = maxRepairCount;
+        }
+
+        public Duration getStaleAfter() {
+            return staleAfter;
+        }
+
+        public void setStaleAfter(Duration staleAfter) {
+            this.staleAfter = staleAfter;
+        }
+
+        public String getRecoveryCron() {
+            return recoveryCron;
+        }
+
+        public void setRecoveryCron(String recoveryCron) {
+            this.recoveryCron = recoveryCron;
+        }
+
+        public int getPageSizeLimit() {
+            return pageSizeLimit;
+        }
+
+        public void setPageSizeLimit(int pageSizeLimit) {
+            this.pageSizeLimit = pageSizeLimit;
+        }
+
+        public String getGraphVersion() {
+            return graphVersion;
+        }
+
+        public void setGraphVersion(String graphVersion) {
+            this.graphVersion = graphVersion;
+        }
+
+        public String getPromptVersion() {
+            return promptVersion;
+        }
+
+        public void setPromptVersion(String promptVersion) {
+            this.promptVersion = promptVersion;
+        }
+
+        public RedisCheckpoint getCheckpoint() {
+            return checkpoint;
+        }
+    }
+
+    public static class RedisCheckpoint {
+        private String host = "127.0.0.1";
+        private int port = 6379;
+        private String password;
+        private int database = 1;
+
+        public String getHost() {
+            return host;
+        }
+
+        public void setHost(String host) {
+            this.host = host;
+        }
+
+        public int getPort() {
+            return port;
+        }
+
+        public void setPort(int port) {
+            this.port = port;
+        }
+
+        public String getPassword() {
+            return password;
+        }
+
+        public void setPassword(String password) {
+            this.password = password;
+        }
+
+        public int getDatabase() {
+            return database;
+        }
+
+        public void setDatabase(int database) {
+            this.database = database;
         }
     }
 

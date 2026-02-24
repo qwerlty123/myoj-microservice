@@ -10,6 +10,12 @@ public record AiChatMessage(
         String content,
         String toolEvents,
         boolean violation,
+        String traceId,
+        String modelName,
+        String promptVersion,
+        Long latencyMs,
+        Integer promptTokens,
+        Integer completionTokens,
         LocalDateTime createTime
 ) {
 }

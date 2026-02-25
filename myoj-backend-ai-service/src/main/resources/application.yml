@@ -16,7 +16,7 @@ spring:
       username: ${NACOS_USERNAME:nacos}
       password: ${NACOS_PASSWORD:}
       discovery:
-        server-addr: ${NACOS_SERVER_ADDR:124.221.250.220:8848}
+        server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
         group: ${NACOS_DISCOVERY_GROUP:DEFAULT_GROUP}
     openfeign:
       client:
@@ -64,10 +64,23 @@ myoj:
       max-history-messages: ${AI_CHAT_MAX_HISTORY_MESSAGES:20}
       max-message-length: 4000
       max-user-code-length: 40000
-      agent-max-steps: ${AI_CHAT_AGENT_MAX_STEPS:6}
+      agent-max-steps: ${AI_CHAT_AGENT_MAX_STEPS:4}
       agent-max-decision-retries: 2
       max-observation-chars: 1200
       archive-cron: ${AI_CHAT_ARCHIVE_CRON:0 0/30 * * * ?}
+    authoring:
+      enabled: ${AI_AUTHORING_ENABLED:true}
+      max-repair-count: ${AI_AUTHORING_MAX_REPAIR_COUNT:3}
+      stale-after: ${AI_AUTHORING_STALE_AFTER:3m}
+      recovery-cron: ${AI_AUTHORING_RECOVERY_CRON:0 */1 * * * ?}
+      page-size-limit: ${AI_AUTHORING_PAGE_SIZE_LIMIT:50}
+      graph-version: ${AI_AUTHORING_GRAPH_VERSION:authoring-v1}
+      prompt-version: ${AI_AUTHORING_PROMPT_VERSION:authoring-v1}
+      checkpoint:
+        host: ${REDIS_HOST:127.0.0.1}
+        port: ${REDIS_PORT:6379}
+        password: ${REDIS_PASSWORD:}
+        database: ${AI_AUTHORING_REDIS_DATABASE:1}
     executor:
       core-size: ${AI_AGENT_CORE_THREADS:2}
       max-size: ${AI_AGENT_MAX_THREADS:8}

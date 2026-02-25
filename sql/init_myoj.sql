@@ -191,6 +191,12 @@ create table if not exists ai_chat_message
     content longtext not null,
     toolEvents longtext null,
     violation tinyint default 0 not null,
+    traceId varchar(64) null,
+    modelName varchar(128) null,
+    promptVersion varchar(64) null,
+    latencyMs bigint null,
+    promptTokens int null,
+    completionTokens int null,
     createTime datetime default CURRENT_TIMESTAMP not null,
     isDelete tinyint default 0 not null,
     index idx_ai_chat_message_session (sessionId, id)
@@ -289,12 +295,44 @@ create table if not exists ai_tool_call_log
     index idx_ai_tool_session (sessionId)
 ) comment 'AI Agent tool call audit log' collate = utf8mb4_unicode_ci;
 
+create table if not exists ai_authoring_task
+(
+    id bigint auto_increment primary key,
+    userId bigint not null,
+    sourceTaskId bigint null,
+    idempotencyKey varchar(128) not null,
+    taskType varchar(32) default 'PROBLEM_DRAFT' not null,
+    requestJson longtext not null,
+    resultJson longtext null,
+    status varchar(32) default 'PENDING' not null,
+    stage varchar(64) default 'QUEUED' not null,
+    progress int default 0 not null,
+    repairCount int default 0 not null,
+    cancelRequested tinyint default 0 not null,
+    errorCode varchar(64) null,
+    lastError varchar(1000) null,
+    modelName varchar(128) null,
+    promptVersion varchar(64) null,
+    graphVersion varchar(64) not null,
+    startedTime datetime null,
+    finishedTime datetime null,
+    createTime datetime default CURRENT_TIMESTAMP not null,
+    updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP,
+    isDelete tinyint default 0 not null,
+    unique index uk_ai_authoring_idempotency (userId, idempotencyKey, isDelete),
+    index idx_ai_authoring_recovery (status, cancelRequested, updateTime),
+    index idx_ai_authoring_user (userId, taskType, id)
+) comment 'Durable AI problem authoring task' collate = utf8mb4_unicode_ci;
+
 insert ignore into ai_prompt_config (scene, versionNo, promptContent, enabled, isActive)
 values ('normal', 1,
         '你是 MyOJ 的算法题辅导助手。结合题面、用户代码、判题结果和历史对话回答。优先引导用户定位问题，除非明确要求，不直接给完整标准答案。',
         1, 1),
        ('agent', 1,
         '你是 MyOJ 的算法题智能辅导 Agent。必要时使用工具分析提交、构造测试、分析报错或检索公开资料，并基于真实工具结果给出结论。',
+        1, 1),
+       ('authoring', 1,
+        '你是 MyOJ 的算法题出题助手。生成原创、可独立评测的 ACM 输入输出题。只生成 Java 17 标准答案，类名必须是 Main；题面包含输入输出格式、数据范围和样例；提供 6 至 8 组非空且互不重复的测试用例。输出必须符合结构化对象约束，不得输出额外解释。',
         1, 1);
 
 insert ignore into ai_tool_config (toolName, enabled, dailyLimit)

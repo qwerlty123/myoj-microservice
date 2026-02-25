@@ -4,8 +4,10 @@ import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 
 @RestControllerAdvice
@@ -19,7 +21,8 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler({MethodArgumentNotValidException.class, ConstraintViolationException.class,
-            HttpMessageNotReadableException.class})
+            HttpMessageNotReadableException.class, MissingRequestHeaderException.class,
+            MethodArgumentTypeMismatchException.class})
     public ApiResponse<Void> handleValidation(Exception exception) {
         String message = exception instanceof MethodArgumentNotValidException invalid
                 && invalid.getBindingResult().getFieldError() != null

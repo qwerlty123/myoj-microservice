@@ -9,6 +9,7 @@ import com.qwerlty.myojbackendaiservice.chat.model.SubmissionContext;
 import com.qwerlty.myojbackendaiservice.chat.model.SubmissionQuery;
 import com.qwerlty.myojbackendaiservice.chat.repository.AiChatRepository;
 import com.qwerlty.myojbackendaiservice.config.AiAgentProperties;
+import com.qwerlty.myojbackendaiservice.observability.AiMetrics;
 import com.qwerlty.myojbackendaiservice.sandbox.SandboxExecuteResponse;
 import com.qwerlty.myojbackendaiservice.sandbox.SandboxExecutionProfile;
 import com.qwerlty.myojbackendaiservice.sandbox.SignedCodeSandboxClient;
@@ -38,17 +39,20 @@ public class TutorToolService {
     private final AiAgentProperties.Search searchProperties;
     private final ObjectMapper objectMapper;
     private final RestClient searchClient;
+    private final AiMetrics metrics;
 
     public TutorToolService(AiChatRepository repository,
                             QuestionContextClient questionClient,
                             SignedCodeSandboxClient sandboxClient,
                             AiAgentProperties properties,
-                            ObjectMapper objectMapper) {
+                            ObjectMapper objectMapper,
+                            AiMetrics metrics) {
         this.repository = repository;
         this.questionClient = questionClient;
         this.sandboxClient = sandboxClient;
         this.searchProperties = properties.getSearch();
         this.objectMapper = objectMapper;
+        this.metrics = metrics;
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(searchProperties.getTimeout());
         factory.setReadTimeout(searchProperties.getTimeout());
@@ -79,6 +83,7 @@ public class TutorToolService {
                 default -> throw new IllegalArgumentException("未知工具：" + toolName);
             };
             repository.saveToolCall(context.userId(), context.sessionId(), toolName, true, output);
+            metrics.tool(toolName, "success");
             return new TutorToolResult(new AiToolEvent(toolName, "done", truncate(output, 300)), output);
         } catch (Exception exception) {
             return failed(toolName, concise(exception.getMessage()), context);
@@ -87,6 +92,7 @@ public class TutorToolService {
 
     private TutorToolResult failed(String toolName, String message, TutorToolContext context) {
         repository.saveToolCall(context.userId(), context.sessionId(), toolName, false, message);
+        metrics.tool(toolName, "error");
         return new TutorToolResult(new AiToolEvent(toolName, "error", message), "工具调用失败：" + message);
     }
 

@@ -1,0 +1,4 @@
+<configuration>
+    <logger name="org.bsc.langgraph4j" level="OFF"/>
+    <root level="WARN"/>
+</configuration>

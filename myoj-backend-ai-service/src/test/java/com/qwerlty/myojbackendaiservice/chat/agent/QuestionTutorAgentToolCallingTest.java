@@ -10,6 +10,8 @@ import com.qwerlty.myojbackendaiservice.chat.tools.TutorToolContext;
 import com.qwerlty.myojbackendaiservice.chat.tools.TutorToolResult;
 import com.qwerlty.myojbackendaiservice.chat.tools.TutorToolService;
 import com.qwerlty.myojbackendaiservice.config.AiAgentProperties;
+import com.qwerlty.myojbackendaiservice.observability.AiMetrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
@@ -61,7 +63,8 @@ class QuestionTutorAgentToolCallingTest {
         StubRepository repository = new StubRepository();
         StubToolService toolService = new StubToolService(repository, properties, objectMapper);
         QuestionTutorAgent agent = new QuestionTutorAgent(
-                chatModel, repository, toolService, properties, objectMapper);
+                chatModel, repository, toolService, properties, objectMapper,
+                new AiMetrics(new SimpleMeterRegistry()), "test-model");
 
         TutorAnswer answer = agent.answer(
                 7L,
@@ -85,7 +88,7 @@ class QuestionTutorAgentToolCallingTest {
         }
 
         @Override
-        public Optional<String> findActivePrompt(String scene) {
+        public Optional<PromptDefinition> findActivePromptDefinition(String scene) {
             return Optional.empty();
         }
 
@@ -102,7 +105,8 @@ class QuestionTutorAgentToolCallingTest {
         private StubToolService(AiChatRepository repository,
                                 AiAgentProperties properties,
                                 ObjectMapper objectMapper) {
-            super(repository, null, null, properties, objectMapper);
+            super(repository, null, null, properties, objectMapper,
+                    new AiMetrics(new SimpleMeterRegistry()));
         }
 
         @Override

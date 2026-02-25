@@ -12,6 +12,12 @@ myoj:
   security:
     gateway-token: ${GATEWAY_TRUST_TOKEN}
   ai:
+    authoring:
+      checkpoint:
+        host: ${REDIS_HOST}
+        port: ${REDIS_PORT:6379}
+        password: ${REDIS_PASSWORD}
+        database: ${AI_AUTHORING_REDIS_DATABASE:1}
     sandbox:
       url: ${CODESANDBOX_URL}
       secret-key: ${CODESANDBOX_SECRET_KEY}

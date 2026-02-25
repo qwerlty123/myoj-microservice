@@ -32,6 +32,7 @@ import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
@@ -157,11 +158,14 @@ public class AiChatService {
             List<AiChatMessage> history = repository.listRecentMessages(
                     session.id(), properties.getMaxHistoryMessages());
             long startedAt = System.currentTimeMillis();
+            String traceId = UUID.randomUUID().toString();
             TutorAnswer answer = tutorAgent.answer(userId, session, question, request, history, sink);
             long duration = System.currentTimeMillis() - startedAt;
             String toolCalls = writeJson(answer.toolEvents());
             AiChatMessage assistant = repository.saveRound(session.id(), request.resolvedMode(),
-                    request.message().trim(), answer.content(), toolCalls, properties.getRetentionDays());
+                    request.message().trim(), answer.content(), toolCalls, properties.getRetentionDays(),
+                    new AiChatRepository.MessageMetadata(traceId, answer.modelName(), answer.promptVersion(),
+                            duration, answer.promptTokens(), answer.completionTokens()));
             AiChatMessageView view = toView(assistant, duration);
             if (sink != null) {
                 sink.emit("meta", new AiChatMeta(Long.toString(session.id()), Long.toString(assistant.id()), assistant.mode()));
@@ -172,6 +176,11 @@ public class AiChatService {
                 done.put("rawContent", view.rawContent());
                 done.put("finalContent", view.finalContent());
                 done.put("reasoningDurationMs", view.reasoningDurationMs());
+                done.put("traceId", view.traceId());
+                done.put("modelName", view.modelName());
+                done.put("promptVersion", view.promptVersion());
+                done.put("promptTokens", view.promptTokens());
+                done.put("completionTokens", view.completionTokens());
                 done.put("toolCalls", view.toolCalls());
                 sink.emit("done", done);
             }
@@ -246,7 +255,9 @@ public class AiChatService {
 
     private AiChatMessageView toView(AiChatMessage message, Long duration) {
         return new AiChatMessageView(Long.toString(message.id()), message.role(), message.mode(), message.content(),
-                message.content(), message.content(), message.toolEvents(), message.createTime(), duration);
+                message.content(), message.content(), message.toolEvents(), message.createTime(),
+                duration == null ? message.latencyMs() : duration, message.traceId(), message.modelName(),
+                message.promptVersion(), message.promptTokens(), message.completionTokens());
     }
 
     private String writeJson(Object value) {

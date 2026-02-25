@@ -1,0 +1,22 @@
+[
+  {"id":"array-sum","requirements":{"topic":"数组区间求和","difficulty":0,"tags":["数组"],"knowledgePoints":["前缀和"],"constraints":"输入规模覆盖空区间边界，答案使用 long"}},
+  {"id":"two-sum","requirements":{"topic":"两数之和的下标","difficulty":0,"tags":["哈希表"],"knowledgePoints":["映射"],"constraints":"保证恰好一组答案，下标从 1 开始"}},
+  {"id":"valid-parentheses","requirements":{"topic":"判断括号序列是否合法","difficulty":0,"tags":["栈"],"knowledgePoints":["括号匹配"],"constraints":"只包含三种括号，包含空串边界"}},
+  {"id":"binary-search","requirements":{"topic":"有序数组中查找第一个目标值","difficulty":0,"tags":["二分"],"knowledgePoints":["边界二分"],"constraints":"不存在时输出 -1，数组允许重复"}},
+  {"id":"matrix-rotate","requirements":{"topic":"顺时针旋转方阵","difficulty":1,"tags":["矩阵"],"knowledgePoints":["下标变换"],"constraints":"矩阵边长 1 到 200"}},
+  {"id":"interval-merge","requirements":{"topic":"合并重叠区间","difficulty":1,"tags":["排序"],"knowledgePoints":["区间合并"],"constraints":"端点相接视为可合并"}},
+  {"id":"sliding-window","requirements":{"topic":"长度不超过 K 的最大连续子数组和","difficulty":1,"tags":["滑动窗口"],"knowledgePoints":["单调队列","前缀和"],"constraints":"数组含负数，使用 long"}},
+  {"id":"island-count","requirements":{"topic":"网格中的岛屿数量","difficulty":1,"tags":["图搜索"],"knowledgePoints":["BFS"],"constraints":"四方向相邻，网格最大 500×500"}},
+  {"id":"topological-sort","requirements":{"topic":"课程依赖能否全部完成","difficulty":1,"tags":["图论"],"knowledgePoints":["拓扑排序"],"constraints":"图可能有重边和孤立点"}},
+  {"id":"shortest-path","requirements":{"topic":"非负权图单源最短路","difficulty":1,"tags":["图论"],"knowledgePoints":["Dijkstra"],"constraints":"不可达输出 -1，边权可为 0"}},
+  {"id":"union-find","requirements":{"topic":"动态合并与连通性查询","difficulty":1,"tags":["并查集"],"knowledgePoints":["路径压缩"],"constraints":"操作数最多 200000"}},
+  {"id":"knapsack","requirements":{"topic":"0-1 背包最大价值","difficulty":1,"tags":["动态规划"],"knowledgePoints":["滚动数组"],"constraints":"容量最多 10000，每件物品只能选择一次"}},
+  {"id":"longest-increasing-subsequence","requirements":{"topic":"最长严格递增子序列长度","difficulty":1,"tags":["动态规划"],"knowledgePoints":["二分优化"],"constraints":"元素可重复，输入规模 200000"}},
+  {"id":"tree-diameter","requirements":{"topic":"带权树的直径","difficulty":1,"tags":["树"],"knowledgePoints":["树形遍历"],"constraints":"边权非负，节点最多 200000"}},
+  {"id":"lowest-common-ancestor","requirements":{"topic":"多次查询树上最近公共祖先","difficulty":2,"tags":["树"],"knowledgePoints":["倍增"],"constraints":"根节点固定，查询最多 200000"}},
+  {"id":"segment-tree","requirements":{"topic":"区间加与区间和查询","difficulty":2,"tags":["线段树"],"knowledgePoints":["懒标记"],"constraints":"数值和答案使用 long"}},
+  {"id":"kmp","requirements":{"topic":"统计模式串在文本中的出现次数","difficulty":1,"tags":["字符串"],"knowledgePoints":["KMP"],"constraints":"允许重叠匹配，字符串仅含小写字母"}},
+  {"id":"minimum-spanning-tree","requirements":{"topic":"连接所有城市的最小成本","difficulty":1,"tags":["图论"],"knowledgePoints":["最小生成树"],"constraints":"无法全部连接输出 -1，可能有重边"}},
+  {"id":"digit-dp","requirements":{"topic":"区间内不含连续相同数字的整数个数","difficulty":2,"tags":["数位DP"],"knowledgePoints":["记忆化搜索"],"constraints":"左右端点不超过 10^18，包含数字 0"}},
+  {"id":"max-flow","requirements":{"topic":"有向网络的最大流","difficulty":2,"tags":["网络流"],"knowledgePoints":["Dinic"],"constraints":"容量为非负整数，源点与汇点不同"}}
+]

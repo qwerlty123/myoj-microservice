@@ -5,28 +5,115 @@ spring:
       password: adgjl08642
       discovery:
         server-addr: 124.221.250.220:8848
+    sentinel:
+      enabled: true
+      scg:
+        # Keep coarse route/IP protection before authentication and Redis access.
+        order: -2147483648
+    circuitbreaker:
+      # Sentinel still owns ingress flow control; Resilience4j owns downstream breakers.
+      sentinel:
+        enabled: false
     gateway:
+      httpclient:
+        connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:1500}
+        response-timeout: ${GATEWAY_RESPONSE_TIMEOUT:5s}
       routes:
         - id: myoj-backend-user-service
           uri: lb://myoj-backend-user-service
           predicates:
             - Path=/api/user/**
+          metadata:
+            connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:1500}
+            response-timeout: ${GATEWAY_DEFAULT_RESPONSE_TIMEOUT_MS:5000}
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: userCircuit
+                fallbackUri: forward:/fallback/user
+                statusCodes:
+                  - "500"
+                  - "502"
+                  - "503"
+                  - "504"
         - id: myoj-backend-question-service
           uri: lb://myoj-backend-question-service
           predicates:
             - Path=/api/question/**
+          metadata:
+            connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:1500}
+            response-timeout: ${GATEWAY_DEFAULT_RESPONSE_TIMEOUT_MS:5000}
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: questionCircuit
+                fallbackUri: forward:/fallback/question
+                statusCodes:
+                  - "500"
+                  - "502"
+                  - "503"
+                  - "504"
         - id: myoj-backend-judge-service
           uri: lb://myoj-backend-judge-service
           predicates:
             - Path=/api/judge/**
+          metadata:
+            connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:1500}
+            response-timeout: ${GATEWAY_JUDGE_RESPONSE_TIMEOUT_MS:15000}
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: judgeCircuit
+                fallbackUri: forward:/fallback/judge
+                statusCodes:
+                  - "500"
+                  - "502"
+                  - "503"
+                  - "504"
         - id: myoj-backend-comment-service
           uri: lb://myoj-backend-comment-service
           predicates:
             - Path=/api/comment/**
+          metadata:
+            connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:1500}
+            response-timeout: ${GATEWAY_DEFAULT_RESPONSE_TIMEOUT_MS:5000}
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: commentCircuit
+                fallbackUri: forward:/fallback/comment
+                statusCodes:
+                  - "500"
+                  - "502"
+                  - "503"
+                  - "504"
+        # SSE is a long-lived connection: limit connection attempts, but do not apply the
+        # normal response timeout or slow-call circuit breaker.
+        - id: myoj-backend-ai-stream
+          order: -10
+          uri: lb://myoj-backend-ai-service
+          predicates:
+            - Path=/api/ai/chat/message/stream
+          metadata:
+            connect-timeout: ${GATEWAY_AI_CONNECT_TIMEOUT_MS:3000}
+            response-timeout: -1
         - id: myoj-backend-ai-service
           uri: lb://myoj-backend-ai-service
           predicates:
             - Path=/api/ai/**
+          metadata:
+            connect-timeout: ${GATEWAY_AI_CONNECT_TIMEOUT_MS:3000}
+            response-timeout: ${GATEWAY_AI_RESPONSE_TIMEOUT_MS:120000}
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: aiCircuit
+                fallbackUri: forward:/fallback/ai
+                statusCodes:
+                  - "500"
+                  - "502"
+                  - "503"
+                  - "504"
   redis:
     host: 124.221.250.220
     port: 6379
@@ -45,6 +132,156 @@ server:
   port: 8101
 security:
   gateway-token: ${GATEWAY_TRUST_TOKEN:change-me-gateway-token}
+
+myoj:
+  gateway:
+    sentinel:
+      local-rules-enabled: ${SENTINEL_LOCAL_RULES_ENABLED:true}
+      routes:
+        myoj-backend-user-service:
+          count: ${GATEWAY_USER_ROUTE_QPS:100}
+          burst: 20
+        myoj-backend-question-service:
+          count: ${GATEWAY_QUESTION_ROUTE_QPS:200}
+          burst: 40
+        myoj-backend-judge-service:
+          count: ${GATEWAY_JUDGE_ROUTE_QPS:50}
+          burst: 10
+        myoj-backend-comment-service:
+          count: ${GATEWAY_COMMENT_ROUTE_QPS:100}
+          burst: 20
+        myoj-backend-ai-stream:
+          count: ${GATEWAY_AI_STREAM_QPS:10}
+          burst: 2
+        myoj-backend-ai-service:
+          count: ${GATEWAY_AI_ROUTE_QPS:20}
+          burst: 4
+      apis:
+        - name: user-login-api
+          paths:
+            - /api/user/login
+          count: ${GATEWAY_LOGIN_PER_MINUTE_PER_IP:10}
+          interval-seconds: 60
+          burst: 2
+          by-client-ip: true
+        - name: user-register-api
+          paths:
+            - /api/user/register
+          count: ${GATEWAY_REGISTER_PER_MINUTE_PER_IP:3}
+          interval-seconds: 60
+          burst: 1
+          by-client-ip: true
+        - name: question-submit-api
+          paths:
+            - /api/question/question_submit/do
+          count: ${GATEWAY_QUESTION_SUBMIT_QPS:20}
+          burst: 5
+        - name: comment-write-api
+          paths:
+            - /api/comment/add
+            - /api/comment/delete
+            - /api/comment/like/**
+            - /api/comment/comment_thumb/**
+          count: ${GATEWAY_COMMENT_WRITE_QPS:30}
+          burst: 5
+        - name: ai-chat-api
+          paths:
+            - /api/ai/chat/message/send
+            - /api/ai/chat/message/stream
+          count: ${GATEWAY_AI_CHAT_QPS:10}
+          burst: 2
+        - name: ai-authoring-api
+          paths:
+            - /api/ai/generation/tasks/**
+          count: ${GATEWAY_AI_AUTHORING_QPS:2}
+          burst: 1
+    user-rate-limit:
+      enabled: ${GATEWAY_USER_RATE_LIMIT_ENABLED:true}
+      fail-open: ${GATEWAY_USER_RATE_LIMIT_FAIL_OPEN:true}
+      rules:
+        - id: question-submit
+          paths:
+            - /api/question/question_submit/do
+          methods:
+            - POST
+          limit: ${GATEWAY_QUESTION_SUBMIT_PER_USER:2}
+          window: 5s
+        - id: comment-add
+          paths:
+            - /api/comment/add
+          methods:
+            - POST
+          limit: ${GATEWAY_COMMENT_ADD_PER_USER:2}
+          window: 5s
+        - id: comment-reaction
+          paths:
+            - /api/comment/like/**
+            - /api/comment/comment_thumb/**
+          methods:
+            - POST
+          limit: ${GATEWAY_COMMENT_REACTION_PER_USER:10}
+          window: 10s
+        - id: ai-chat
+          paths:
+            - /api/ai/chat/message/send
+            - /api/ai/chat/message/stream
+          methods:
+            - POST
+          limit: ${GATEWAY_AI_CHAT_PER_USER_PER_MINUTE:6}
+          window: 60s
+        - id: ai-authoring
+          paths:
+            - /api/ai/generation/tasks/problem-drafts
+          methods:
+            - POST
+          limit: ${GATEWAY_AI_AUTHORING_PER_USER_PER_MINUTE:1}
+          window: 60s
+
+resilience4j:
+  circuitbreaker:
+    configs:
+      gateway-default:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        slow-call-rate-threshold: 60
+        slow-call-duration-threshold: 3s
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+    instances:
+      userCircuit:
+        base-config: gateway-default
+      questionCircuit:
+        base-config: gateway-default
+      commentCircuit:
+        base-config: gateway-default
+      judgeCircuit:
+        base-config: gateway-default
+        slow-call-duration-threshold: 10s
+      aiCircuit:
+        base-config: gateway-default
+        slow-call-duration-threshold: 60s
+  timelimiter:
+    configs:
+      gateway-default:
+        timeout-duration: 6s
+        cancel-running-future: true
+    instances:
+      userCircuit:
+        base-config: gateway-default
+      questionCircuit:
+        base-config: gateway-default
+      commentCircuit:
+        base-config: gateway-default
+      judgeCircuit:
+        base-config: gateway-default
+        timeout-duration: 16s
+      aiCircuit:
+        base-config: gateway-default
+        timeout-duration: 121s
 knife4j:
   gateway:
     # ① 第一个配置，开启gateway聚合组件
@@ -62,6 +299,8 @@ management:
   health:
     elasticsearch:
       enabled: false
+    circuitbreakers:
+      enabled: true
   endpoints:
     web:
       exposure:

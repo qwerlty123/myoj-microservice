@@ -1,12 +1,14 @@
 package com.qwerlty.myojbackendgateway.filter;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qwerlty.myojbackendcommon.utils.JwtUtils;
+import com.qwerlty.myojbackendgateway.web.GatewayErrorResponseWriter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.server.MockServerWebExchange;
-import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
@@ -15,18 +17,21 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class GlobalAuthFilterTest {
 
     private GlobalAuthFilter filter;
+    private ReactiveStringRedisTemplate redisTemplate;
 
     @BeforeEach
     void setUp() {
-        filter = new GlobalAuthFilter();
-        StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
-        when(redisTemplate.hasKey(anyString())).thenReturn(false);
-        ReflectionTestUtils.setField(filter, "stringRedisTemplate", redisTemplate);
+        redisTemplate = mock(ReactiveStringRedisTemplate.class);
+        when(redisTemplate.hasKey(anyString())).thenReturn(Mono.just(false));
+        filter = new GlobalAuthFilter(redisTemplate,
+                new GatewayErrorResponseWriter(new ObjectMapper()));
     }
 
     @Test
@@ -54,5 +59,50 @@ class GlobalAuthFilterTest {
                 .containsExactly("admin");
         assertThat(forwarded.get().getRequest().getHeaders().get("X-Gateway-Token"))
                 .isNull();
+    }
+
+    @Test
+    void returnsUnauthorizedWhenTokenIsBlacklisted() {
+        when(redisTemplate.hasKey(anyString())).thenReturn(Mono.just(true));
+        String token = JwtUtils.generateToken(7L, "user");
+        MockServerWebExchange exchange = authenticatedExchange(token);
+
+        filter.filter(exchange, value -> Mono.error(new AssertionError("request must not be forwarded")))
+                .block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(exchange.getResponse().getBodyAsString().block()).contains("\"code\":40100");
+    }
+
+    @Test
+    void returnsServiceUnavailableWhenRedisCannotBeReached() {
+        when(redisTemplate.hasKey(anyString())).thenReturn(Mono.error(new IllegalStateException("redis down")));
+        String token = JwtUtils.generateToken(7L, "user");
+        MockServerWebExchange exchange = authenticatedExchange(token);
+
+        filter.filter(exchange, value -> Mono.error(new AssertionError("request must not be forwarded")))
+                .block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(exchange.getResponse().getBodyAsString().block()).contains("\"code\":50300");
+    }
+
+    @Test
+    void rejectsMalformedJwtBeforeCallingRedis() {
+        MockServerWebExchange exchange = authenticatedExchange("not-a-jwt");
+
+        filter.filter(exchange, value -> Mono.error(new AssertionError("request must not be forwarded")))
+                .block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        verify(redisTemplate, never()).hasKey(anyString());
+    }
+
+    private MockServerWebExchange authenticatedExchange(String token) {
+        return MockServerWebExchange.from(
+                org.springframework.mock.http.server.reactive.MockServerHttpRequest
+                        .get("/api/question/list/page")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .build());
     }
 }

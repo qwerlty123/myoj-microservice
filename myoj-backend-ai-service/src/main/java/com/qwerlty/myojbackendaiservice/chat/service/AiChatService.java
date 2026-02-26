@@ -152,7 +152,7 @@ public class AiChatService {
             String disableReason = findDisableReason(userId, question.id());
             if (StringUtils.hasText(disableReason)) {
                 repository.updateSessionAccess(session.id(), ChatSessionStatus.DISABLED.value(), disableReason);
-                throw ApiException.operation(disableReason);
+                throw ApiException.forbidden(disableReason);
             }
             checkInputSafety(userId, session.id(), request.message());
             List<AiChatMessage> history = repository.listRecentMessages(
@@ -200,12 +200,12 @@ public class AiChatService {
     private void checkInputSafety(long userId, long sessionId, String message) {
         if (safetyPolicy.containsPromptInjection(message)) {
             repository.saveViolation(userId, sessionId, null, "prompt_injection", truncate(message, 500));
-            throw ApiException.operation("检测到疑似提示词注入行为，请求已被拦截");
+            throw ApiException.forbidden("检测到疑似提示词注入行为，请求已被拦截");
         }
         String word = safetyPolicy.matchedSensitiveWord(message, repository.listSensitiveWords());
         if (word != null) {
             repository.saveViolation(userId, sessionId, null, "input_sensitive", truncate(message, 500));
-            throw ApiException.operation("消息包含不允许的内容");
+            throw ApiException.forbidden("消息包含不允许的内容");
         }
     }
 
@@ -314,7 +314,7 @@ public class AiChatService {
 
     private void checkEnabled() {
         if (!properties.isEnabled()) {
-            throw ApiException.operation("AI 功能当前未开启");
+            throw ApiException.serviceUnavailable("AI 功能当前未开启");
         }
     }
 

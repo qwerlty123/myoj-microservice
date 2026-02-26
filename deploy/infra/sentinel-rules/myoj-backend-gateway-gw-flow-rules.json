@@ -1,0 +1,112 @@
+[
+  {
+    "resource": "myoj-backend-user-service",
+    "resourceMode": 0,
+    "grade": 1,
+    "count": 100,
+    "intervalSec": 1,
+    "controlBehavior": 0,
+    "burst": 20
+  },
+  {
+    "resource": "myoj-backend-question-service",
+    "resourceMode": 0,
+    "grade": 1,
+    "count": 200,
+    "intervalSec": 1,
+    "controlBehavior": 0,
+    "burst": 40
+  },
+  {
+    "resource": "myoj-backend-judge-service",
+    "resourceMode": 0,
+    "grade": 1,
+    "count": 50,
+    "intervalSec": 1,
+    "controlBehavior": 0,
+    "burst": 10
+  },
+  {
+    "resource": "myoj-backend-comment-service",
+    "resourceMode": 0,
+    "grade": 1,
+    "count": 100,
+    "intervalSec": 1,
+    "controlBehavior": 0,
+    "burst": 20
+  },
+  {
+    "resource": "myoj-backend-ai-stream",
+    "resourceMode": 0,
+    "grade": 1,
+    "count": 10,
+    "intervalSec": 1,
+    "controlBehavior": 0,
+    "burst": 2
+  },
+  {
+    "resource": "myoj-backend-ai-service",
+    "resourceMode": 0,
+    "grade": 1,
+    "count": 20,
+    "intervalSec": 1,
+    "controlBehavior": 0,
+    "burst": 4
+  },
+  {
+    "resource": "user-login-api",
+    "resourceMode": 1,
+    "grade": 1,
+    "count": 10,
+    "intervalSec": 60,
+    "controlBehavior": 0,
+    "burst": 2,
+    "paramItem": { "parseStrategy": 0 }
+  },
+  {
+    "resource": "user-register-api",
+    "resourceMode": 1,
+    "grade": 1,
+    "count": 3,
+    "intervalSec": 60,
+    "controlBehavior": 0,
+    "burst": 1,
+    "paramItem": { "parseStrategy": 0 }
+  },
+  {
+    "resource": "question-submit-api",
+    "resourceMode": 1,
+    "grade": 1,
+    "count": 20,
+    "intervalSec": 1,
+    "controlBehavior": 0,
+    "burst": 5
+  },
+  {
+    "resource": "comment-write-api",
+    "resourceMode": 1,
+    "grade": 1,
+    "count": 30,
+    "intervalSec": 1,
+    "controlBehavior": 0,
+    "burst": 5
+  },
+  {
+    "resource": "ai-chat-api",
+    "resourceMode": 1,
+    "grade": 1,
+    "count": 10,
+    "intervalSec": 1,
+    "controlBehavior": 0,
+    "burst": 2
+  },
+  {
+    "resource": "ai-authoring-api",
+    "resourceMode": 1,
+    "grade": 1,
+    "count": 2,
+    "intervalSec": 1,
+    "controlBehavior": 0,
+    "burst": 1
+  }
+]

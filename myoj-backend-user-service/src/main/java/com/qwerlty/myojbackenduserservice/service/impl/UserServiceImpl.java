@@ -312,7 +312,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         // 1. 从请求头中获取 Token
         String token = request.getHeader("Authorization");
         if (StringUtils.isBlank(token) || !token.startsWith("Bearer ")) {
-            throw new BusinessException(ErrorCode.OPERATION_ERROR, "未提供 Token");
+            throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR, "未提供 Token");
         }
         token = token.substring(7); // 去除 "Bearer " 前缀
 
@@ -341,7 +341,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Override
     public boolean userLogoutBytoken(String token) {
         if (StringUtils.isBlank(token) || !token.startsWith("Bearer ")) {
-            throw new BusinessException(ErrorCode.OPERATION_ERROR, "未提供 Token");
+            throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR, "未提供 Token");
         }
         token = token.substring(7); // 去除 "Bearer " 前缀
 

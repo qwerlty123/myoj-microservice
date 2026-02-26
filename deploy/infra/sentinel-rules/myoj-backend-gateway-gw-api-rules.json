@@ -1,0 +1,42 @@
+[
+  {
+    "apiName": "user-login-api",
+    "predicateItems": [
+      { "pattern": "/api/user/login", "matchStrategy": 0 }
+    ]
+  },
+  {
+    "apiName": "user-register-api",
+    "predicateItems": [
+      { "pattern": "/api/user/register", "matchStrategy": 0 }
+    ]
+  },
+  {
+    "apiName": "question-submit-api",
+    "predicateItems": [
+      { "pattern": "/api/question/question_submit/do", "matchStrategy": 0 }
+    ]
+  },
+  {
+    "apiName": "comment-write-api",
+    "predicateItems": [
+      { "pattern": "/api/comment/add", "matchStrategy": 0 },
+      { "pattern": "/api/comment/delete", "matchStrategy": 0 },
+      { "pattern": "/api/comment/like/", "matchStrategy": 1 },
+      { "pattern": "/api/comment/comment_thumb/", "matchStrategy": 1 }
+    ]
+  },
+  {
+    "apiName": "ai-chat-api",
+    "predicateItems": [
+      { "pattern": "/api/ai/chat/message/send", "matchStrategy": 0 },
+      { "pattern": "/api/ai/chat/message/stream", "matchStrategy": 0 }
+    ]
+  },
+  {
+    "apiName": "ai-authoring-api",
+    "predicateItems": [
+      { "pattern": "/api/ai/generation/tasks/", "matchStrategy": 1 }
+    ]
+  }
+]

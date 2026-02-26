@@ -288,7 +288,7 @@ public class UserController {
         }
         User loginUser = userService.getLoginUser(request);
         if (Objects.equals(deleteRequest.getId(), loginUser.getId())){
-            throw new BusinessException(ErrorCode.OPERATION_ERROR,"不能删除自己");
+            throw new BusinessException(ErrorCode.FORBIDDEN_ERROR,"不能删除自己");
         }
         boolean b = userService.removeById(deleteRequest.getId());
         return ResultUtils.success(b);

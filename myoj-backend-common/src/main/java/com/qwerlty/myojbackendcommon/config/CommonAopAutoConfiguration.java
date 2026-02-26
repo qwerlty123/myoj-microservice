@@ -2,10 +2,12 @@ package com.qwerlty.myojbackendcommon.config;
 
 import com.qwerlty.myojbackendcommon.aspect.AuthCheckAspect;
 import com.qwerlty.myojbackendcommon.aspect.LogExecutionTimeAspect;
+import com.qwerlty.myojbackendcommon.exception.GlobalExceptionHandler;
 import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.config.BeanPostProcessor;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.util.ReflectionUtils;
 
 import java.lang.reflect.Field;
@@ -27,6 +29,16 @@ public class CommonAopAutoConfiguration {
     @Bean
     public LogExecutionTimeAspect logExecutionTimeAspect() {
         return new LogExecutionTimeAspect();
+    }
+
+    /**
+     * Common is a sibling package of every service application, so component scanning does
+     * not discover its controller advice. Register it through auto-configuration instead.
+    */
+    @Bean
+    @ConditionalOnMissingBean(GlobalExceptionHandler.class)
+    public GlobalExceptionHandler globalExceptionHandler() {
+        return new GlobalExceptionHandler();
     }
 
     /**

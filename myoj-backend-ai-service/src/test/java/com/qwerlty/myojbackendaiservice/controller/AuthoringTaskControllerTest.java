@@ -50,7 +50,7 @@ class AuthoringTaskControllerTest {
                         .header("X-Gateway-Token", "trusted")
                         .header("X-User-Id", "7")
                         .header("X-User-Role", "user"))
-                .andExpect(status().isOk())
+                .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value(40300));
     }
 
@@ -62,7 +62,7 @@ class AuthoringTaskControllerTest {
                         .header("X-User-Role", "admin")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"requirements\":{\"topic\":\"滑动窗口\"}}"))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(40000));
     }
 
@@ -75,7 +75,7 @@ class AuthoringTaskControllerTest {
                         .header("X-Idempotency-Key", "invalid-requirements")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"requirements\":{\"topic\":\"\"}}"))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(40000));
     }
 

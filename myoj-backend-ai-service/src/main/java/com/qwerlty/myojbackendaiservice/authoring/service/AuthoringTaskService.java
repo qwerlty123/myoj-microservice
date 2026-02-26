@@ -144,7 +144,7 @@ public class AuthoringTaskService {
             activeTasks.remove(task.id());
             repository.fail(task.id(), "QUEUE_REJECTED", "AI 任务队列繁忙，请稍后重试", task.repairCount());
             metrics.task("queue_rejected");
-            throw ApiException.operation("AI 任务队列繁忙，请稍后重试");
+            throw ApiException.tooManyRequests("AI 任务队列繁忙，请稍后重试");
         }
     }
 
@@ -224,7 +224,9 @@ public class AuthoringTaskService {
     }
 
     private void ensureEnabled() {
-        if (!properties.isEnabled()) throw ApiException.operation("AI 出题功能当前未启用");
+        if (!properties.isEnabled()) {
+            throw ApiException.serviceUnavailable("AI 出题功能当前未启用");
+        }
     }
 
     private static String concise(String value) {

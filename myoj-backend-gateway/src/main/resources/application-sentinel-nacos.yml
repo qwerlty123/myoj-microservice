@@ -1,0 +1,30 @@
+spring:
+  cloud:
+    sentinel:
+      datasource:
+        gateway-flow:
+          nacos:
+            server-addr: ${spring.cloud.nacos.discovery.server-addr}
+            username: ${spring.cloud.nacos.username}
+            password: ${spring.cloud.nacos.password}
+            namespace: ${NACOS_CONFIG_NAMESPACE:}
+            group-id: ${SENTINEL_RULE_GROUP:DEFAULT_GROUP}
+            data-id: ${SENTINEL_GATEWAY_FLOW_DATA_ID:myoj-backend-gateway-gw-flow-rules}
+            data-type: json
+            rule-type: gw-flow
+        gateway-api-group:
+          nacos:
+            server-addr: ${spring.cloud.nacos.discovery.server-addr}
+            username: ${spring.cloud.nacos.username}
+            password: ${spring.cloud.nacos.password}
+            namespace: ${NACOS_CONFIG_NAMESPACE:}
+            group-id: ${SENTINEL_RULE_GROUP:DEFAULT_GROUP}
+            data-id: ${SENTINEL_GATEWAY_API_DATA_ID:myoj-backend-gateway-gw-api-rules}
+            data-type: json
+            rule-type: gw-api-group
+
+myoj:
+  gateway:
+    sentinel:
+      # Dynamic data sources must be the only owner of Sentinel's rule managers.
+      local-rules-enabled: false

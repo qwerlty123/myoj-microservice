@@ -1,29 +1,37 @@
 package com.qwerlty.myojbackendgateway.filter;
 
+import com.qwerlty.myojbackendcommon.common.ErrorCode;
 import com.qwerlty.myojbackendcommon.utils.JwtUtils;
+import com.qwerlty.myojbackendgateway.web.GatewayErrorResponseWriter;
 import io.jsonwebtoken.Claims;
 import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
-import org.springframework.core.io.buffer.DataBuffer;
-import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.server.reactive.ServerHttpRequest;
-import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.stereotype.Component;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.util.AntPathMatcher;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
-
-import javax.annotation.Resource;
-import java.nio.charset.StandardCharsets;
+import reactor.core.publisher.Signal;
 
 @Component
 public class GlobalAuthFilter implements GlobalFilter, Ordered {
 
-    private AntPathMatcher antPathMatcher = new AntPathMatcher();
+    private static final Logger log = LoggerFactory.getLogger(GlobalAuthFilter.class);
+
+    static final int ORDER = -100;
+
+    private final AntPathMatcher antPathMatcher = new AntPathMatcher();
+
+    private final ReactiveStringRedisTemplate redisTemplate;
+
+    private final GatewayErrorResponseWriter responseWriter;
 
     // 不需要验证token的路径
     private static final String[] WHITE_LIST = {
@@ -42,11 +50,14 @@ public class GlobalAuthFilter implements GlobalFilter, Ordered {
             "/api/judge/v2/**",
             "/api/user/v2/**",
     };
-    @Resource
-    private StringRedisTemplate stringRedisTemplate;
-
     @Value("${security.gateway-token:}")
     private String gatewayToken;
+
+    public GlobalAuthFilter(ReactiveStringRedisTemplate redisTemplate,
+                            GatewayErrorResponseWriter responseWriter) {
+        this.redisTemplate = redisTemplate;
+        this.responseWriter = responseWriter;
+    }
 
     /**
      * 判断是否为白名单路径
@@ -78,7 +89,8 @@ public class GlobalAuthFilter implements GlobalFilter, Ordered {
         //判断路径中是否包含 inner，只运行内部调用
         if (antPathMatcher.match("/**/inner/**", path)
                 || antPathMatcher.match("/**/internal/**", path)) {
-            return writeError(exchange.getResponse(), "无权限");
+            return responseWriter.write(exchange, HttpStatus.FORBIDDEN,
+                    ErrorCode.NO_AUTH_ERROR, "无权限", null);
         }
         //公开接口（如登录注册）放行
         if (isWhiteListPath(path)) {
@@ -87,51 +99,85 @@ public class GlobalAuthFilter implements GlobalFilter, Ordered {
         //验证 jwt
         String token = request.getHeaders().getFirst("Authorization");
         if (StringUtils.isBlank(token) || !token.startsWith("Bearer ")) {
-            return writeError(exchange.getResponse(), "未提供token");
+            return writeUnauthorized(exchange, "未提供token");
         }
-        try {
-            token = token.substring(7);
-            // 解析 JWT 并验证
-            // 新增：检查 Token 是否在黑名单中
-            if (stringRedisTemplate.hasKey("jwt:blacklist:" + token)) {
-                return writeError(exchange.getResponse(), "Token 已失效");
-            }
-            Claims claims = JwtUtils.parseToken(token);
-            Long userId = Long.parseLong(claims.get("userId", String.class));
-            String userRole = claims.get("userRole", String.class);
-
-            //将用户信息添加到请求头中，传递给下游服务
-            ServerHttpRequest newRequest = request.mutate()
-                    .headers(headers -> {
-                        // 客户端身份头不可信，必须先移除再写入 JWT 中的可信身份。
-                        headers.set("X-user-Id", userId.toString());
-                        headers.set("X-user-Role", userRole);
-                        if (StringUtils.isNotBlank(gatewayToken)) {
-                            headers.set("X-Gateway-Token", gatewayToken);
-                        }
-                    })
-                    .build();
-            return chain.filter(exchange.mutate().request(newRequest).build());
-        } catch (Exception e) {
-            return writeError(exchange.getResponse(), "Token无效或已过期");
-        }
+        String jwt = token.substring(7);
+        ServerWebExchange currentExchange = exchange;
+        ServerHttpRequest currentRequest = request;
+        return authenticate(currentExchange, currentRequest, jwt)
+                .materialize()
+                .flatMap(signal -> handleAuthenticationSignal(signal, currentExchange, chain));
     }
 
     /**
-     * 优先级提到最高
-     * @return
+     * Complete authentication before the per-user limiter reads trusted identity headers.
      */
     @Override
     public int getOrder() {
-        return 0;
+        return ORDER;
     }
 
-    private Mono<Void> writeError(ServerHttpResponse response, String message) {
-        return writeError(response,message,HttpStatus.UNAUTHORIZED);
+    private Mono<Void> writeUnauthorized(ServerWebExchange exchange, String message) {
+        return responseWriter.write(exchange, HttpStatus.UNAUTHORIZED,
+                ErrorCode.NOT_LOGIN_ERROR, message, null);
     }
-    private Mono<Void> writeError(ServerHttpResponse response, String message,HttpStatus httpStatus) {
-        response.setStatusCode(httpStatus);
-        DataBuffer buffer = response.bufferFactory().wrap(message.getBytes(StandardCharsets.UTF_8));
-        return response.writeWith(Mono.just(buffer));
+
+    private Mono<ServerWebExchange> authenticate(ServerWebExchange exchange,
+                                                  ServerHttpRequest request,
+                                                  String token) {
+        final Long userId;
+        final String userRole;
+        try {
+            Claims claims = JwtUtils.parseToken(token);
+            userId = Long.parseLong(claims.get("userId", String.class));
+            userRole = claims.get("userRole", String.class);
+            if (userId <= 0 || StringUtils.isBlank(userRole)) {
+                throw new IllegalArgumentException("JWT identity claims are incomplete");
+            }
+        } catch (Exception exception) {
+            return Mono.error(new InvalidTokenException("Token无效或已过期"));
+        }
+
+        return redisTemplate.hasKey("jwt:blacklist:" + token)
+                .defaultIfEmpty(false)
+                .flatMap(blocklisted -> {
+                    if (Boolean.TRUE.equals(blocklisted)) {
+                        return Mono.error(new InvalidTokenException("Token 已失效"));
+                    }
+                    ServerHttpRequest authenticatedRequest = request.mutate()
+                            .headers(headers -> {
+                                headers.set("X-user-Id", userId.toString());
+                                headers.set("X-user-Role", userRole);
+                                if (StringUtils.isNotBlank(gatewayToken)) {
+                                    headers.set("X-Gateway-Token", gatewayToken);
+                                }
+                            })
+                            .build();
+                    return Mono.just(exchange.mutate().request(authenticatedRequest).build());
+                });
+    }
+
+    private Mono<Void> handleAuthenticationSignal(Signal<ServerWebExchange> signal,
+                                                   ServerWebExchange exchange,
+                                                   GatewayFilterChain chain) {
+        if (signal.hasValue()) {
+            return chain.filter(signal.get());
+        }
+        Throwable error = signal.getThrowable();
+        if (error instanceof InvalidTokenException) {
+            return writeUnauthorized(exchange, error.getMessage());
+        }
+        log.warn("Authentication dependency failed for path {}: {}",
+                exchange.getRequest().getURI().getPath(),
+                error == null ? "unknown error" : error.toString());
+        return responseWriter.write(exchange, HttpStatus.SERVICE_UNAVAILABLE,
+                ErrorCode.SERVICE_UNAVAILABLE, "认证服务暂时不可用", null);
+    }
+
+    private static final class InvalidTokenException extends RuntimeException {
+
+        private InvalidTokenException(String message) {
+            super(message);
+        }
     }
 }

@@ -1,5 +1,6 @@
 package com.qwerlty.myojbackendjudgeservice.judge.mq;
 
+import com.qwerlty.myojbackendcommon.constant.MqConstant;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.DirectExchange;
@@ -13,9 +14,9 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class RabbitMqConfig {
 
-    public static final String EXCHANGE_NAME = "question_to_judge_exchange";
-    public static final String QUEUE_NAME = "question_to_judge_queue";
-    public static final String ROUTING_KEY = "qj_key";
+    public static final String EXCHANGE_NAME = MqConstant.EXCHANGE_NAME;
+    public static final String QUEUE_NAME = MqConstant.NORMAL_QUEUE_NAME;
+    public static final String ROUTING_KEY = MqConstant.NORMAL_ROUTING_KEY;
 
     @Bean
     public DirectExchange questionToJudgeExchange() {

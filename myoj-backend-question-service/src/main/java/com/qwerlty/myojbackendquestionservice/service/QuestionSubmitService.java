@@ -5,9 +5,15 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.qwerlty.myojbackendmodel.model.dto.questionsubmit.QuestionSubmitAddRequest;
 import com.qwerlty.myojbackendmodel.model.dto.questionsubmit.QuestionSubmitQueryRequest;
+import com.qwerlty.myojbackendmodel.model.entity.Question;
 import com.qwerlty.myojbackendmodel.model.entity.QuestionSubmit;
 import com.qwerlty.myojbackendmodel.model.entity.User;
+import com.qwerlty.myojbackendmodel.model.vo.MyQuestionSubmitVO;
 import com.qwerlty.myojbackendmodel.model.vo.QuestionSubmitVO;
+import com.qwerlty.myojbackendmodel.model.vo.UserLeaderboardVO;
+import com.qwerlty.myojbackendmodel.model.vo.UserStatsVO;
+
+import java.util.List;
 
 
 /**
@@ -16,13 +22,6 @@ import com.qwerlty.myojbackendmodel.model.vo.QuestionSubmitVO;
 * @createDate 2026-02-20 22:25:35
 */
 public interface QuestionSubmitService extends IService<QuestionSubmit> {
-    /**
-     * 题目提交
-     *
-     * @param questionSubmitAddRequest 题目提交信息
-     * @param loginUser
-     * @return
-     */
     long doQuestionSubmit(QuestionSubmitAddRequest questionSubmitAddRequest, User loginUser);
 
     /**
@@ -33,6 +32,7 @@ public interface QuestionSubmitService extends IService<QuestionSubmit> {
      */
     QueryWrapper<QuestionSubmit> getQueryWrapper(QuestionSubmitQueryRequest questionSubmitQueryRequest);
 
+
     /**
      * 获取题目封装
      *
@@ -40,14 +40,20 @@ public interface QuestionSubmitService extends IService<QuestionSubmit> {
      * @param loginUser
      * @return
      */
-    QuestionSubmitVO getQuestionSubmitVO(QuestionSubmit questionSubmit, User loginUser);
+    QuestionSubmitVO getQuestionSubmitVO(QuestionSubmit questionSubmit, User loginUser, User user, Question question);
 
     /**
      * 分页获取题目封装
      *
-     * @param questionSubmitPage
+     * @param questionPage
      * @param loginUser
      * @return
      */
-    Page<QuestionSubmitVO> getQuestionSubmitVOPage(Page<QuestionSubmit> questionSubmitPage, User loginUser);
+    Page<QuestionSubmitVO> getQuestionSubmitVOPage(Page<QuestionSubmit> questionPage, User loginUser);
+
+    Page<MyQuestionSubmitVO> getMyQuestionSubmitVOPage(Page<QuestionSubmit> questionSubmitPage, User loginUser);
+
+    UserStatsVO getUserStats(Long id);
+
+    List<UserLeaderboardVO> getLeaderboard();
 }

@@ -5,7 +5,10 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.qwerlty.myojbackendmodel.model.dto.question.QuestionQueryRequest;
 import com.qwerlty.myojbackendmodel.model.entity.Question;
+import com.qwerlty.myojbackendmodel.model.entity.User;
+import com.qwerlty.myojbackendmodel.model.vo.HotQuestionVO;
 import com.qwerlty.myojbackendmodel.model.vo.QuestionVO;
+import org.springframework.transaction.annotation.Transactional;
 
 import javax.servlet.http.HttpServletRequest;
 
@@ -16,6 +19,9 @@ import javax.servlet.http.HttpServletRequest;
  */
 public interface QuestionService extends IService<Question> {
 
+
+    @Transactional
+    boolean deleteQuestionAndSubmit(Long questionId, User user);
 
     /**
      * 校验
@@ -33,14 +39,15 @@ public interface QuestionService extends IService<Question> {
      */
     QueryWrapper<Question> getQueryWrapper(QuestionQueryRequest questionQueryRequest);
 
+
     /**
      * 获取题目封装
      *
      * @param question
-     * @param request
+     * @param loginUser
      * @return
      */
-    QuestionVO getQuestionVO(Question question, HttpServletRequest request);
+    QuestionVO getQuestionVO(Question question, User loginUser);
 
     /**
      * 分页获取题目封装
@@ -50,5 +57,7 @@ public interface QuestionService extends IService<Question> {
      * @return
      */
     Page<QuestionVO> getQuestionVOPage(Page<Question> questionPage, HttpServletRequest request);
+
+    Page<HotQuestionVO> listHotQuestions(QuestionQueryRequest questionQueryRequest);
 
 }

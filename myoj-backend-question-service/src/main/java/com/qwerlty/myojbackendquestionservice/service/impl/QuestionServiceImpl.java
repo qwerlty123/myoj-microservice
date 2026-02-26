@@ -1,5 +1,8 @@
 package com.qwerlty.myojbackendquestionservice.service.impl;
 
+import cn.hutool.core.collection.CollUtil;
+import cn.hutool.json.JSONUtil;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -10,16 +13,20 @@ import com.qwerlty.myojbackendcommon.exception.ThrowUtils;
 import com.qwerlty.myojbackendcommon.utils.SqlUtils;
 import com.qwerlty.myojbackendmodel.model.dto.question.QuestionQueryRequest;
 import com.qwerlty.myojbackendmodel.model.entity.Question;
+import com.qwerlty.myojbackendmodel.model.entity.QuestionSubmit;
 import com.qwerlty.myojbackendmodel.model.entity.User;
+import com.qwerlty.myojbackendmodel.model.vo.HotQuestionVO;
 import com.qwerlty.myojbackendmodel.model.vo.QuestionVO;
 import com.qwerlty.myojbackendmodel.model.vo.UserVO;
 import com.qwerlty.myojbackendquestionservice.mapper.QuestionMapper;
 import com.qwerlty.myojbackendquestionservice.service.QuestionService;
-import com.qwerlty.myojbackendserviceclient.service.UserFeignClient;
-import org.apache.commons.collections4.CollectionUtils;
+import com.qwerlty.myojbackendquestionservice.service.QuestionSubmitService;
+import com.qwerlty.myojbackendserviceclient.client.UserFeignClient;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
@@ -40,16 +47,33 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question>
     @Resource
     private UserFeignClient userFeignClient;
 
-    /**
-     * 校验题目是否合法
-     * @param question
-     * @param add
-     */
+    @Resource
+    @Lazy
+    private QuestionSubmitService questionSubmitService;
+
+
+    @Override
+    @Transactional
+    public boolean deleteQuestionAndSubmit(Long questionId, User user){
+        // 判断是否存在
+        Question oldQuestion = this.getById(questionId);
+        ThrowUtils.throwIf(oldQuestion == null, ErrorCode.NOT_FOUND_ERROR);
+        // 仅本人或管理员可删除
+        if (!oldQuestion.getUserId().equals(user.getId()) && !userFeignClient.isAdmin(user)) {
+            throw new BusinessException(ErrorCode.NO_AUTH_ERROR);
+        }
+        boolean a = this.removeById(questionId);
+        QueryWrapper<QuestionSubmit> questionSubmitQueryWrapper = new QueryWrapper<QuestionSubmit>().eq("questionId", questionId);
+        boolean b = questionSubmitService.remove(questionSubmitQueryWrapper);
+        return a && b;
+    }
+
     @Override
     public void validQuestion(Question question, boolean add) {
         if (question == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
+
         String title = question.getTitle();
         String content = question.getContent();
         String tags = question.getTags();
@@ -67,19 +91,19 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question>
         if (StringUtils.isNotBlank(content) && content.length() > 8192) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "内容过长");
         }
-        if (StringUtils.isNotBlank(answer) && answer.length() > 8192) {
+        if (StringUtils.isNotBlank(answer) && content.length() > 8192) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "答案过长");
         }
-        if (StringUtils.isNotBlank(judgeCase) && judgeCase.length() > 8192) {
+        if (StringUtils.isNotBlank(judgeCase) && content.length() > 8192) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "判题用例过长");
         }
-        if (StringUtils.isNotBlank(judgeConfig) && judgeConfig.length() > 8192) {
+        if (StringUtils.isNotBlank(judgeConfig) && content.length() > 8192) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "判题配置过长");
         }
     }
 
     /**
-     * 获取查询包装类（用户根据哪些字段查询，根据前端传来的请求对象，得到 mybatis 框架支持的查询 QueryWrapper 类）
+     * 获取查询包装类
      *
      * @param questionQueryRequest
      * @return
@@ -98,26 +122,28 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question>
         Long userId = questionQueryRequest.getUserId();
         String sortField = questionQueryRequest.getSortField();
         String sortOrder = questionQueryRequest.getSortOrder();
+        Integer difficulty = questionQueryRequest.getDifficulty();
 
-        // 拼接查询条件
         queryWrapper.like(StringUtils.isNotBlank(title), "title", title);
         queryWrapper.like(StringUtils.isNotBlank(content), "content", content);
         queryWrapper.like(StringUtils.isNotBlank(answer), "answer", answer);
-        if (CollectionUtils.isNotEmpty(tags)) {
+        if (CollUtil.isNotEmpty(tags)) {
             for (String tag : tags) {
                 queryWrapper.like("tags", "\"" + tag + "\"");
             }
         }
-        queryWrapper.eq(ObjectUtils.isNotEmpty(id), "id", id);
+        queryWrapper.ne(ObjectUtils.isNotEmpty(id), "id", id);
         queryWrapper.eq(ObjectUtils.isNotEmpty(userId), "userId", userId);
         queryWrapper.eq("isDelete", false);
+        queryWrapper.eq(ObjectUtils.isNotEmpty(difficulty), "difficulty", difficulty);
         queryWrapper.orderBy(SqlUtils.validSortField(sortField), sortOrder.equals(CommonConstant.SORT_ORDER_ASC),
                 sortField);
         return queryWrapper;
     }
 
+
     @Override
-    public QuestionVO getQuestionVO(Question question, HttpServletRequest request) {
+    public QuestionVO getQuestionVO(Question question, User loginUser) {
         QuestionVO questionVO = QuestionVO.objToVo(question);
         // 1. 关联查询用户信息
         Long userId = question.getUserId();
@@ -134,13 +160,14 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question>
     public Page<QuestionVO> getQuestionVOPage(Page<Question> questionPage, HttpServletRequest request) {
         List<Question> questionList = questionPage.getRecords();
         Page<QuestionVO> questionVOPage = new Page<>(questionPage.getCurrent(), questionPage.getSize(), questionPage.getTotal());
-        if (CollectionUtils.isEmpty(questionList)) {
+        if (CollUtil.isEmpty(questionList)) {
             return questionVOPage;
         }
         // 1. 关联查询用户信息
         Set<Long> userIdSet = questionList.stream().map(Question::getUserId).collect(Collectors.toSet());
         Map<Long, List<User>> userIdUserListMap = userFeignClient.listByIds(userIdSet).stream()
                 .collect(Collectors.groupingBy(User::getId));
+
         // 填充信息
         List<QuestionVO> questionVOList = questionList.stream().map(question -> {
             QuestionVO questionVO = QuestionVO.objToVo(question);
@@ -156,6 +183,24 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question>
         return questionVOPage;
     }
 
+    @Override
+    public Page<HotQuestionVO> listHotQuestions(QuestionQueryRequest questionQueryRequest) {
+        LambdaQueryWrapper<Question> questionLambdaQueryWrapper = new LambdaQueryWrapper<>();
+        questionLambdaQueryWrapper.orderByDesc(Question::getAcceptedNum);
+        questionLambdaQueryWrapper.orderByAsc(Question::getSubmitNum);
+        Page<Question> hotQuestionPage = this.page(new Page<>(questionQueryRequest.getCurrent(), questionQueryRequest.getPageSize()), questionLambdaQueryWrapper);
+        List<HotQuestionVO> hotQuestionVOS = hotQuestionPage.getRecords().stream()
+                .limit(5)
+                .map(question -> {
+                    HotQuestionVO hotQuestionVO = new HotQuestionVO();
+                    hotQuestionVO.setId(question.getId());
+                    hotQuestionVO.setTitle(question.getTitle());
+                    hotQuestionVO.setTags(JSONUtil.toList(question.getTags(), String.class));
+                    hotQuestionVO.setDifficulty(question.getDifficulty());
+                    return hotQuestionVO;
+                }).collect(Collectors.toList());
+        return  new Page<HotQuestionVO>(hotQuestionPage.getCurrent(), hotQuestionPage.getSize(), hotQuestionPage.getTotal()).setRecords(hotQuestionVOS);
+    }
 }
 
 

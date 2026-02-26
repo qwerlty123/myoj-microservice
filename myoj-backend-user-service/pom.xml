@@ -47,6 +47,13 @@
             <artifactId>myoj-backend-service-client</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
+
+        <!-- MinIO 8.5.x 依赖 OkHttp 4.x，显式引入以覆盖传递的 OkHttp 3.x，避免 RequestBody.create 方法不存在 -->
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>okhttp</artifactId>
+            <version>4.12.0</version>
+        </dependency>
     </dependencies>
     <dependencyManagement>
         <dependencies>

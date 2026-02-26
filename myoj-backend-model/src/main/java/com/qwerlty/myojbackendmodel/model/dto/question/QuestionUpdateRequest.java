@@ -19,6 +19,10 @@ public class QuestionUpdateRequest implements Serializable {
      * id
      */
     private Long id;
+    /**
+     * 难度
+     */
+    private Integer difficulty;
 
     /**
      * 标题
@@ -31,7 +35,7 @@ public class QuestionUpdateRequest implements Serializable {
     private String content;
 
     /**
-     * 标签列表
+     * 标签列表（json 数组）
      */
     private List<String> tags;
 
@@ -41,12 +45,12 @@ public class QuestionUpdateRequest implements Serializable {
     private String answer;
 
     /**
-     * 判题用例
+     * 判题用例（json 数组）
      */
     private List<JudgeCase> judgeCase;
 
     /**
-     * 判题配置
+     * 判题配置（json 对象）
      */
     private JudgeConfig judgeConfig;
 

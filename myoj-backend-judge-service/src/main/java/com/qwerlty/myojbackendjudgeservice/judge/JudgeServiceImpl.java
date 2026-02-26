@@ -14,7 +14,7 @@ import com.qwerlty.myojbackendmodel.model.dto.question.JudgeCase;
 import com.qwerlty.myojbackendmodel.model.entity.Question;
 import com.qwerlty.myojbackendmodel.model.entity.QuestionSubmit;
 import com.qwerlty.myojbackendmodel.model.enums.QuestionSubmitStatusEnum;
-import com.qwerlty.myojbackendserviceclient.service.QuestionFeignClient;
+import com.qwerlty.myojbackendserviceclient.client.QuestionFeignClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 

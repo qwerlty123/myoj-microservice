@@ -3,7 +3,7 @@ package com.qwerlty.myojbackendjudgeservice.judge.controller.inner;
 
 import com.qwerlty.myojbackendjudgeservice.judge.JudgeService;
 import com.qwerlty.myojbackendmodel.model.entity.QuestionSubmit;
-import com.qwerlty.myojbackendserviceclient.service.JudgeFeignClient;
+import com.qwerlty.myojbackendserviceclient.client.JudgeFeignClient;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;

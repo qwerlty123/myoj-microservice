@@ -2,7 +2,9 @@ package com.qwerlty.myojbackenduserservice.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.service.IService;
+import com.qwerlty.myojbackendmodel.model.dto.user.UserAddRequest;
 import com.qwerlty.myojbackendmodel.model.dto.user.UserQueryRequest;
+import com.qwerlty.myojbackendmodel.model.dto.user.UserUpdateRequest;
 import com.qwerlty.myojbackendmodel.model.entity.User;
 import com.qwerlty.myojbackendmodel.model.vo.LoginUserVO;
 import com.qwerlty.myojbackendmodel.model.vo.UserVO;
@@ -27,6 +29,20 @@ public interface UserService extends IService<User> {
      * @return 新用户 id
      */
     long userRegister(String userAccount, String userPassword, String checkPassword);
+    /**
+     * 添加用户
+     *
+     * @param userAddRequest   用户添加DTO
+     * @return 新用户 id
+     */
+    long userAdd(UserAddRequest userAddRequest);
+    /**
+     * 修改用户
+     *
+     * @param userUpdateRequest   用户修改DTO
+     * @return 用户 id
+     */
+    boolean userUpdate(UserUpdateRequest userUpdateRequest);
 
     /**
      * 用户登录
@@ -37,7 +53,6 @@ public interface UserService extends IService<User> {
      * @return 脱敏后的用户信息
      */
     LoginUserVO userLogin(String userAccount, String userPassword, HttpServletRequest request);
-
 
     /**
      * 获取当前登录用户
@@ -109,5 +124,6 @@ public interface UserService extends IService<User> {
      * @return
      */
     QueryWrapper<User> getQueryWrapper(UserQueryRequest userQueryRequest);
+    public boolean userLogoutBytoken(String token);
 
 }

@@ -3,7 +3,7 @@
 # @from <a href="https://yupi.icu">编程导航知识星球</a>
 spring:
   application:
-    name: myoj-backend-user-service
+    name: myoj-backend-comment-service
   # 默认 dev 环境
   profiles:
     active: dev
@@ -11,12 +11,12 @@ spring:
   mvc:
     pathmatch:
       matching-strategy: ant_path_matcher
-  # session 配置
-#  session:
+    # session 配置
+    #  session:
     # todo 取消注释开启分布式 session（须先配置 Redis）
     # store-type: redis
     # 30 天过期
-#    timeout: 2592000
+  #    timeout: 2592000
   # 数据库配置
   # todo 需替换配置
   datasource:
@@ -34,10 +34,10 @@ spring:
     password: adgjl08642
   # Elasticsearch 配置
   # todo 需替换配置，然后取消注释
-#  elasticsearch:
-#    uris: http://localhost:9200
-#    username: root
-#    password: 123456
+  #  elasticsearch:
+  #    uris: http://localhost:9200
+  #    username: root
+  #    password: 123456
   # 文件上传
   servlet:
     multipart:
@@ -51,9 +51,9 @@ spring:
         server-addr: 192.168.249.129:8848
 server:
   address: 0.0.0.0
-  port: 8102
+  port: 8105
   servlet:
-    context-path: /api/user
+    context-path: /api/comment
     # cookie 30 天过期
     session:
       cookie:
@@ -76,12 +76,12 @@ cos:
     region: xxx
     bucket: xxx
 # 用户头像上传 MinIO 配置（与 MinioConfiguration 的 file.minio 前缀对应）
-file:
-  minio:
-    accessKey: admin
-    secretKey: admin123
-    endpoint: http://localhost:9000
-    bucket: myoj
+#file:
+#  minio:
+#    accessKey: admin
+#    secretKey: admin123
+#    endpoint: http://localhost:9000
+#    bucket: myoj
 # 接口文档配置
 knife4j:
   enable: true
@@ -92,7 +92,7 @@ knife4j:
       default:
         api-rule: package
         api-rule-resources:
-          - com.qwerlty.myojbackenduserservice.controller
+          - com.qwerlty.myojbackendcommentservice.controller
 #代码沙箱配置
 codesandbox:
   type: remote

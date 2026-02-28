@@ -12,7 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * @author 黄昊
+ * @author 李天宇
  * @version 1.0
  **/
 public class WordUtils {

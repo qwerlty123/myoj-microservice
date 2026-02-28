@@ -77,13 +77,14 @@ AI_CHAT_STREAM_TIMEOUT=30m
 AI_AUTHORING_ENABLED=true
 AI_AUTHORING_MAX_REPAIR_COUNT=3
 AI_AUTHORING_STALE_AFTER=3m
-AI_AUTHORING_GRAPH_VERSION=authoring-v1
+AI_AUTHORING_GRAPH_VERSION=authoring-v2-hitl
 AI_AUTHORING_PROMPT_VERSION=authoring-v1
 AI_AUTHORING_REDIS_DATABASE=1
 ```
 
 AI Service 提供持久化多轮算法辅导，以及异步、可恢复的 AI 出题任务。出题草稿通过规则与代码沙箱后只会进入
-`REVIEW_REQUIRED`，仍需管理员人工确认。若需要辅导端的 `webSearch` 工具，再额外填写
+`REVIEW_REQUIRED`；管理员确认后恢复同一 LangGraph checkpoint，并由 Question Service 幂等发布。已有数据库升级时先执行
+`sql/migration_20260831_ai_authoring_hitl_publish.sql`。若需要辅导端的 `webSearch` 工具，再额外填写
 `BAIDU_AI_SEARCH_API_KEY`；不填写不会影响其他工具和出题工作流。
 
 当前配置使用 `admin` 作为 MySQL、RabbitMQ 和 MinIO 的业务账号；`MYSQL_USER` 不能填写 `root`。`root` 账号只由 `MYSQL_ROOT_PASSWORD` 配置。

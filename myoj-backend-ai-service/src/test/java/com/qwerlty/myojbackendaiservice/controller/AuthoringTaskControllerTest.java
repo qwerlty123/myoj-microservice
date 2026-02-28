@@ -2,6 +2,7 @@ package com.qwerlty.myojbackendaiservice.controller;
 
 import com.qwerlty.myojbackendaiservice.authoring.api.AuthoringTaskPage;
 import com.qwerlty.myojbackendaiservice.authoring.api.AuthoringTaskView;
+import com.qwerlty.myojbackendaiservice.authoring.api.AuthoringTraceEventView;
 import com.qwerlty.myojbackendaiservice.authoring.service.AuthoringTaskService;
 import com.qwerlty.myojbackendaiservice.common.GlobalExceptionHandler;
 import com.qwerlty.myojbackendaiservice.config.GatewayTrustFilter;
@@ -119,6 +120,48 @@ class AuthoringTaskControllerTest {
                         .header("X-User-Id", "7")
                         .header("X-User-Role", "admin"))
                 .andExpect(jsonPath("$.data.taskId").value("52"));
+    }
+
+    @Test
+    void submitsTrustedAdminHumanReviewToResumeTheGraph() throws Exception {
+        when(service.review(org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq(51L), any()))
+                .thenReturn(view("51", "PUBLISHED"));
+
+        mvc.perform(post("/generation/tasks/51/review")
+                        .header("X-Gateway-Token", "trusted")
+                        .header("X-User-Id", "7")
+                        .header("X-User-Role", "admin")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"decision\":\"APPROVE\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
+
+        verify(service).review(org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq(51L),
+                org.mockito.ArgumentMatchers.argThat(review ->
+                        review.decision().name().equals("APPROVE")));
+    }
+
+    @Test
+    void returnsTheOwnedTasksSanitizedTrace() throws Exception {
+        LocalDateTime now = LocalDateTime.now();
+        when(service.trace(7L, 51L)).thenReturn(List.of(new AuthoringTraceEventView(
+                "1", "authoring-task-51", "review-run", "authoring-task-51",
+                "authoring-v2-hitl", "WRITE_COMPLETED",
+                "publish_question", null, null, "SUCCESS", 23L, "7",
+                "{\"questionId\":\"9001\"}", now)));
+
+        mvc.perform(get("/generation/tasks/51/trace")
+                        .header("X-Gateway-Token", "trusted")
+                        .header("X-User-Id", "7")
+                        .header("X-User-Role", "admin"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].traceId").value("authoring-task-51"))
+                .andExpect(jsonPath("$.data[0].eventType").value("WRITE_COMPLETED"))
+                .andExpect(jsonPath("$.data[0].actorId").value("7"));
+
+        verify(service).trace(7L, 51L);
     }
 
     private static AuthoringTaskView view(String id, String status) {

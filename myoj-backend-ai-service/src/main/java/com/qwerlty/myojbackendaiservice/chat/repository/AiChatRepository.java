@@ -15,7 +15,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.sql.Timestamp;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -96,30 +95,81 @@ public class AiChatRepository {
                         + "ORDER BY id", MESSAGE_ROW_MAPPER, sessionId, safeLimit);
     }
 
+    @Transactional
+    public SessionClaim claimSession(long sessionId, String clientMessageId,
+                                     LocalDateTime leaseUntil, int retentionDays) {
+        LocalDateTime now = LocalDateTime.now();
+        SessionCoordination coordination = jdbcTemplate.query("""
+                        SELECT version, activeRequestId, activeRequestToken, activeRequestExpireTime
+                        FROM ai_chat_session
+                        WHERE id = ? AND isDelete = 0
+                        FOR UPDATE
+                        """, (rs, rowNum) -> new SessionCoordination(
+                        rs.getLong("version"), rs.getString("activeRequestId"),
+                        rs.getLong("activeRequestToken"),
+                        toLocalDateTime(rs.getTimestamp("activeRequestExpireTime"))), sessionId)
+                .stream().findFirst()
+                .orElseThrow(() -> new IllegalStateException("AI 会话不存在"));
+
+        Optional<AiChatMessage> completed = findCompletedMessage(sessionId, clientMessageId);
+        if (completed.isPresent()) {
+            return SessionClaim.completed(completed.get());
+        }
+        if (coordination.activeRequestId() != null
+                && (coordination.activeRequestExpireTime() == null
+                || coordination.activeRequestExpireTime().isAfter(now))) {
+            return SessionClaim.busy();
+        }
+
+        long token = Math.incrementExact(coordination.activeRequestToken());
+        jdbcTemplate.update("""
+                UPDATE ai_chat_session
+                SET activeRequestId = ?, activeRequestToken = ?, activeRequestExpireTime = ?,
+                    expireTime = ?, updateTime = ?
+                WHERE id = ? AND isDelete = 0
+                """, clientMessageId, token, leaseUntil,
+                now.plusDays(Math.max(retentionDays, 1)), now, sessionId);
+        return SessionClaim.acquired(coordination.version(), token);
+    }
+
+    public Optional<AiChatMessage> findCompletedMessage(long sessionId, String clientMessageId) {
+        return jdbcTemplate.query("SELECT " + MESSAGE_COLUMNS + " FROM ai_chat_message "
+                        + "WHERE sessionId = ? AND clientMessageId = ? AND role = 'assistant' "
+                        + "AND isDelete = 0 ORDER BY id DESC LIMIT 1",
+                MESSAGE_ROW_MAPPER, sessionId, clientMessageId).stream().findFirst();
+    }
+
     public AiChatMessage saveMessage(long sessionId, String role, String mode, String content,
                                      String toolEvents, boolean violation, MessageMetadata metadata) {
+        return saveMessage(sessionId, null, role, mode, content, toolEvents, violation, metadata);
+    }
+
+    private AiChatMessage saveMessage(long sessionId, String clientMessageId,
+                                      String role, String mode, String content,
+                                      String toolEvents, boolean violation, MessageMetadata metadata) {
         LocalDateTime now = LocalDateTime.now();
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbcTemplate.update(connection -> {
             PreparedStatement statement = connection.prepareStatement("""
                     INSERT INTO ai_chat_message
-                    (sessionId, role, mode, content, toolEvents, violation, traceId, modelName,
+                    (sessionId, clientMessageId, role, mode, content, toolEvents, violation, traceId, modelName,
                      promptVersion, latencyMs, promptTokens, completionTokens, createTime, isDelete)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                     """, Statement.RETURN_GENERATED_KEYS);
             statement.setLong(1, sessionId);
-            statement.setString(2, role);
-            statement.setString(3, mode);
-            statement.setString(4, content);
-            statement.setString(5, toolEvents);
-            statement.setBoolean(6, violation);
-            statement.setString(7, metadata == null ? null : metadata.traceId());
-            statement.setString(8, metadata == null ? null : metadata.modelName());
-            statement.setString(9, metadata == null ? null : metadata.promptVersion());
-            statement.setObject(10, metadata == null ? null : metadata.latencyMs());
-            statement.setObject(11, metadata == null ? null : metadata.promptTokens());
-            statement.setObject(12, metadata == null ? null : metadata.completionTokens());
-            statement.setTimestamp(13, Timestamp.valueOf(now));
+            statement.setString(2, clientMessageId);
+            statement.setString(3, role);
+            statement.setString(4, mode);
+            statement.setString(5, content);
+            statement.setString(6, toolEvents);
+            statement.setBoolean(7, violation);
+            statement.setString(8, metadata == null ? null : metadata.traceId());
+            statement.setString(9, metadata == null ? null : metadata.modelName());
+            statement.setString(10, metadata == null ? null : metadata.promptVersion());
+            statement.setObject(11, metadata == null ? null : metadata.latencyMs());
+            statement.setObject(12, metadata == null ? null : metadata.promptTokens());
+            statement.setObject(13, metadata == null ? null : metadata.completionTokens());
+            statement.setTimestamp(14, Timestamp.valueOf(now));
             return statement;
         }, keyHolder);
         Number key = keyHolder.getKey();
@@ -137,50 +187,80 @@ public class AiChatRepository {
 
     @Transactional
     public void clearMessages(long sessionId, int retentionDays) {
-        jdbcTemplate.update("UPDATE ai_chat_message SET isDelete = 1 WHERE sessionId = ? AND isDelete = 0", sessionId);
         LocalDateTime now = LocalDateTime.now();
         jdbcTemplate.update("""
                 UPDATE ai_chat_session
-                SET mode = ?, status = ?, disableReason = NULL, lastMessageTime = ?, expireTime = ?, updateTime = ?
+                SET mode = ?, status = ?, disableReason = NULL,
+                    version = version + 1,
+                    activeRequestId = NULL,
+                    activeRequestToken = activeRequestToken + 1,
+                    activeRequestExpireTime = NULL,
+                    lastMessageTime = ?, expireTime = ?, updateTime = ?
                 WHERE id = ? AND isDelete = 0
                 """, ChatMode.NORMAL.value(), ChatSessionStatus.ACTIVE.value(), now,
                 now.plusDays(Math.max(retentionDays, 1)), now, sessionId);
+        jdbcTemplate.update("UPDATE ai_chat_message SET isDelete = 1 WHERE sessionId = ? AND isDelete = 0", sessionId);
     }
 
     @Transactional
-    public AiChatMessage saveRound(long sessionId, ChatMode mode, String userContent,
-                                   String assistantContent, String toolEvents, int retentionDays,
-                                   MessageMetadata metadata) {
+    public Optional<AiChatMessage> saveRoundIfCurrent(long sessionId, String clientMessageId,
+                                                      long sessionVersion, long requestToken,
+                                                      ChatMode mode, String userContent,
+                                                      String assistantContent, String toolEvents,
+                                                      int retentionDays, MessageMetadata metadata) {
+        LocalDateTime now = LocalDateTime.now();
+        int claimed = jdbcTemplate.update("""
+                UPDATE ai_chat_session
+                SET mode = ?, status = ?, disableReason = NULL,
+                    activeRequestId = NULL, activeRequestExpireTime = NULL,
+                    lastMessageTime = ?, expireTime = ?, updateTime = ?
+                WHERE id = ? AND version = ? AND activeRequestId = ?
+                  AND activeRequestToken = ? AND isDelete = 0
+                """, mode.value(), ChatSessionStatus.ACTIVE.value(), now,
+                now.plusDays(Math.max(retentionDays, 1)), now, sessionId,
+                sessionVersion, clientMessageId, requestToken);
+        if (claimed != 1) {
+            return Optional.empty();
+        }
         MessageMetadata userMetadata = metadata == null ? null
                 : new MessageMetadata(metadata.traceId(), null, null, null, null, null);
-        saveMessage(sessionId, "user", mode.value(), userContent, null, false, userMetadata);
+        saveMessage(sessionId, clientMessageId, "user", mode.value(), userContent, null, false, userMetadata);
         AiChatMessage assistant = saveMessage(
-                sessionId, "assistant", mode.value(), assistantContent, toolEvents, false, metadata);
-        touchSession(sessionId, mode, retentionDays);
-        return assistant;
+                sessionId, clientMessageId, "assistant", mode.value(), assistantContent, toolEvents, false, metadata);
+        return Optional.of(assistant);
     }
 
-    public void touchSession(long sessionId, ChatMode mode, int retentionDays) {
-        LocalDateTime now = LocalDateTime.now();
+    public void releaseSessionClaim(long sessionId, String clientMessageId, long requestToken) {
         jdbcTemplate.update("""
                 UPDATE ai_chat_session
-                SET mode = ?, status = ?, disableReason = NULL, lastMessageTime = ?, expireTime = ?, updateTime = ?
-                WHERE id = ? AND isDelete = 0
-                """, mode.value(), ChatSessionStatus.ACTIVE.value(), now,
-                now.plusDays(Math.max(retentionDays, 1)), now, sessionId);
+                SET activeRequestId = NULL, activeRequestExpireTime = NULL, updateTime = ?
+                WHERE id = ? AND activeRequestId = ? AND activeRequestToken = ? AND isDelete = 0
+                """, LocalDateTime.now(), sessionId, clientMessageId, requestToken);
     }
 
     public void updateSessionAccess(long sessionId, int status, String disableReason) {
+        if (status == ChatSessionStatus.DISABLED.value()) {
+            jdbcTemplate.update("""
+                    UPDATE ai_chat_session
+                    SET status = ?, disableReason = ?, activeRequestId = NULL,
+                        activeRequestToken = activeRequestToken + 1,
+                        activeRequestExpireTime = NULL, updateTime = ?
+                    WHERE id = ? AND isDelete = 0
+                    """, status, disableReason, LocalDateTime.now(), sessionId);
+            return;
+        }
+        String idleClause = status == ChatSessionStatus.ARCHIVED.value()
+                ? " AND activeRequestId IS NULL" : "";
         jdbcTemplate.update("""
                 UPDATE ai_chat_session SET status = ?, disableReason = ?, updateTime = ?
                 WHERE id = ? AND isDelete = 0
-                """, status, disableReason, LocalDateTime.now(), sessionId);
+                """ + idleClause, status, disableReason, LocalDateTime.now(), sessionId);
     }
 
     public int archiveExpiredSessions() {
         return jdbcTemplate.update("""
                 UPDATE ai_chat_session SET status = ?, updateTime = ?
-                WHERE status = ? AND expireTime < ? AND isDelete = 0
+                WHERE status = ? AND expireTime < ? AND activeRequestId IS NULL AND isDelete = 0
                 """, ChatSessionStatus.ARCHIVED.value(), LocalDateTime.now(),
                 ChatSessionStatus.ACTIVE.value(), LocalDateTime.now());
     }
@@ -242,12 +322,26 @@ public class AiChatRepository {
                 .stream().findFirst().orElse(new ToolPolicy(true, 30));
     }
 
-    public int countToolCallsToday(long userId, String toolName) {
-        Integer count = jdbcTemplate.queryForObject("""
-                SELECT COUNT(*) FROM ai_tool_call_log
-                WHERE userId = ? AND toolName = ? AND createTime >= ? AND isDelete = 0
-                """, Integer.class, userId, toolName, LocalDate.now().atStartOfDay());
-        return count == null ? 0 : count;
+    @Transactional
+    public boolean tryAcquireToolQuota(long userId, String toolName, int dailyLimit) {
+        jdbcTemplate.update("""
+                INSERT IGNORE INTO ai_tool_daily_quota
+                (userId, toolName, usageDate, usedCount, createTime, updateTime)
+                VALUES (?, ?, CURRENT_DATE(), 0, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())
+                """, userId, toolName);
+        Integer used = jdbcTemplate.queryForObject("""
+                SELECT usedCount FROM ai_tool_daily_quota
+                WHERE userId = ? AND toolName = ? AND usageDate = CURRENT_DATE()
+                FOR UPDATE
+                """, Integer.class, userId, toolName);
+        if (dailyLimit > 0 && used != null && used >= dailyLimit) {
+            return false;
+        }
+        return jdbcTemplate.update("""
+                UPDATE ai_tool_daily_quota
+                SET usedCount = usedCount + 1, updateTime = CURRENT_TIMESTAMP()
+                WHERE userId = ? AND toolName = ? AND usageDate = CURRENT_DATE()
+                """, userId, toolName) == 1;
     }
 
     public void saveToolCall(long userId, long sessionId, String toolName, boolean success, String summary) {
@@ -314,6 +408,33 @@ public class AiChatRepository {
 
     public record MessageMetadata(String traceId, String modelName, String promptVersion,
                                   Long latencyMs, Integer promptTokens, Integer completionTokens) {
+    }
+
+    public enum ClaimState {
+        ACQUIRED,
+        COMPLETED,
+        BUSY
+    }
+
+    public record SessionClaim(ClaimState state, long sessionVersion, long requestToken,
+                               AiChatMessage completedMessage) {
+
+        public static SessionClaim acquired(long sessionVersion, long requestToken) {
+            return new SessionClaim(ClaimState.ACQUIRED, sessionVersion, requestToken, null);
+        }
+
+        public static SessionClaim completed(AiChatMessage message) {
+            return new SessionClaim(ClaimState.COMPLETED, 0, 0, message);
+        }
+
+        public static SessionClaim busy() {
+            return new SessionClaim(ClaimState.BUSY, 0, 0, null);
+        }
+    }
+
+    private record SessionCoordination(long version, String activeRequestId,
+                                       long activeRequestToken,
+                                       LocalDateTime activeRequestExpireTime) {
     }
 
     private static Integer nullableInteger(Object value) {

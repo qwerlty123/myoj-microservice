@@ -33,10 +33,11 @@ class AiChatContractTest {
     void scopesRequestsOnlyByQuestion() {
         JsonNode sessionRequest = objectMapper.valueToTree(new AiChatSessionRequest(1L));
         JsonNode sendRequest = objectMapper.valueToTree(new AiChatSendRequest(
-                1L, "normal", "请提示思路", "java", null, null, List.of()));
+                "contract-test", 1L, "normal", "请提示思路", "java", null, null, List.of()));
 
         assertThat(sessionRequest.has("contestId")).isFalse();
         assertThat(sendRequest.has("contestId")).isFalse();
+        assertThat(sendRequest.path("clientMessageId").asText()).isEqualTo("contract-test");
         assertThat(sessionRequest.path("questionId").asLong()).isEqualTo(1L);
     }
 }

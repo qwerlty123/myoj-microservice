@@ -15,6 +15,10 @@ public class AuthoringState extends AgentState {
     public static final String MODEL_NAME = "modelName";
     public static final String PROMPT_VERSION = "promptVersion";
     public static final String RESULT_STATUS = "resultStatus";
+    public static final String REVIEW_DECISION = "reviewDecision";
+    public static final String REVIEWER_ID = "reviewerId";
+    public static final String REVIEWED_DRAFT_JSON = "reviewedDraftJson";
+    public static final String PUBLISHED_QUESTION_ID = "publishedQuestionId";
 
     public AuthoringState(Map<String, Object> initData) {
         super(initData);
@@ -41,5 +45,12 @@ public class AuthoringState extends AgentState {
     public boolean bool(String key) {
         Object value = data().get(key);
         return value instanceof Boolean bool ? bool : Boolean.parseBoolean(String.valueOf(value));
+    }
+
+    public long longValue(String key) {
+        Object value = data().get(key);
+        if (value instanceof Number number) return number.longValue();
+        if (value == null) return 0;
+        return Long.parseLong(value.toString());
     }
 }

@@ -2,6 +2,7 @@ package com.qwerlty.myojbackendaiservice.chat.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.qwerlty.myojbackendaiservice.chat.agent.ChatExecutionCancelledException;
 import com.qwerlty.myojbackendaiservice.chat.agent.ChatEventSink;
 import com.qwerlty.myojbackendaiservice.chat.agent.QuestionTutorAgent;
 import com.qwerlty.myojbackendaiservice.chat.agent.TutorAnswer;
@@ -33,9 +34,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Service
 public class AiChatService {
@@ -47,23 +51,22 @@ public class AiChatService {
     private final QuestionTutorAgent tutorAgent;
     private final ChatSafetyPolicy safetyPolicy;
     private final AiAgentProperties.Chat properties;
-    private final ThreadPoolTaskExecutor executor;
+    private final ThreadPoolTaskExecutor chatExecutor;
     private final ObjectMapper objectMapper;
-    private final ReentrantLock[] sessionLocks = createLocks(1_024);
 
     public AiChatService(AiChatRepository repository,
                          QuestionContextClient questionClient,
                          QuestionTutorAgent tutorAgent,
                          ChatSafetyPolicy safetyPolicy,
                          AiAgentProperties properties,
-                         @Qualifier("aiAgentExecutor") ThreadPoolTaskExecutor executor,
+                         @Qualifier("aiChatExecutor") ThreadPoolTaskExecutor chatExecutor,
                          ObjectMapper objectMapper) {
         this.repository = repository;
         this.questionClient = questionClient;
         this.tutorAgent = tutorAgent;
         this.safetyPolicy = safetyPolicy;
         this.properties = properties.getChat();
-        this.executor = executor;
+        this.chatExecutor = chatExecutor;
         this.objectMapper = objectMapper;
     }
 
@@ -85,41 +88,85 @@ public class AiChatService {
     public boolean clearSession(long userId, AiChatSessionRequest request) {
         checkEnabled();
         repository.findSession(userId, request.questionId())
-                .ifPresent(session -> withLock(session.id(), () -> {
-                    repository.clearMessages(session.id(), properties.getRetentionDays());
-                    return null;
-                }));
+                .ifPresent(session -> repository.clearMessages(session.id(), properties.getRetentionDays()));
         return true;
     }
 
     public AiChatMessageView chat(long userId, AiChatSendRequest request) {
-        return doChat(userId, request, null);
+        checkEnabled();
+        ChatExecutionControl control = new ChatExecutionControl();
+        Future<AiChatMessageView> future;
+        try {
+            future = chatExecutor.submit(() -> doChat(userId, request, null, control));
+        } catch (TaskRejectedException exception) {
+            throw ApiException.tooManyRequests("当前 AI 请求较多，请稍后重试");
+        }
+        try {
+            return future.get(properties.getTimeout().toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException exception) {
+            control.cancel();
+            future.cancel(true);
+            throw ApiException.serviceUnavailable("AI 回复超时，请稍后重试");
+        } catch (InterruptedException exception) {
+            control.cancel();
+            future.cancel(true);
+            Thread.currentThread().interrupt();
+            throw ApiException.serviceUnavailable("AI 回复已取消");
+        } catch (ExecutionException exception) {
+            Throwable cause = exception.getCause();
+            if (cause instanceof ChatExecutionCancelledException) {
+                throw ApiException.serviceUnavailable("AI 回复已取消");
+            }
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw ApiException.serviceUnavailable("AI 服务暂时不可用");
+        }
     }
 
     public SseEmitter streamChat(long userId, AiChatSendRequest request) {
         checkEnabled();
         SseEmitter emitter = new SseEmitter(properties.getTimeout().toMillis());
         AtomicBoolean closed = new AtomicBoolean(false);
-        Future<?>[] task = new Future<?>[1];
-        emitter.onCompletion(() -> cancel(closed, task));
-        emitter.onError(error -> cancel(closed, task));
+        ChatExecutionControl control = new ChatExecutionControl();
+        AtomicReference<Future<?>> task = new AtomicReference<>();
+        emitter.onCompletion(() -> cancel(closed, control, task));
+        emitter.onError(error -> cancel(closed, control, task));
         emitter.onTimeout(() -> {
             if (closed.compareAndSet(false, true)) {
                 safeSend(emitter, "error", "AI 回复超时，请稍后重试");
-                if (task[0] != null) {
-                    task[0].cancel(true);
+                control.cancel();
+                Future<?> future = task.get();
+                if (future != null) {
+                    future.cancel(true);
                 }
                 safeComplete(emitter);
             }
         });
         try {
-            task[0] = executor.submit(() -> {
+            Future<?> submitted = chatExecutor.submit(() -> {
                 try {
-                    doChat(userId, request, (name, data) -> {
-                        if (!closed.get()) {
-                            safeSend(emitter, name, data);
+                    ChatEventSink sink = new ChatEventSink() {
+                        @Override
+                        public void emit(String name, Object data) {
+                            control.checkCancelled();
+                            if (closed.get() || !safeSend(emitter, name, data)) {
+                                control.cancel();
+                                throw new ChatExecutionCancelledException();
+                            }
                         }
-                    });
+
+                        @Override
+                        public boolean isCancelled() {
+                            return control.isCancelled();
+                        }
+                    };
+                    doChat(userId, request, sink, control);
+                    if (closed.compareAndSet(false, true)) {
+                        safeComplete(emitter);
+                    }
+                } catch (ChatExecutionCancelledException ignored) {
+                    control.cancel();
                     if (closed.compareAndSet(false, true)) {
                         safeComplete(emitter);
                     }
@@ -131,7 +178,12 @@ public class AiChatService {
                     }
                 }
             });
+            task.set(submitted);
+            if (control.isCancelled()) {
+                submitted.cancel(true);
+            }
         } catch (TaskRejectedException exception) {
+            closed.set(true);
             safeSend(emitter, "error", "当前 AI 请求较多，请稍后重试");
             safeComplete(emitter);
         }
@@ -142,50 +194,88 @@ public class AiChatService {
         return repository.archiveExpiredSessions();
     }
 
-    private AiChatMessageView doChat(long userId, AiChatSendRequest request, ChatEventSink sink) {
+    private AiChatMessageView doChat(long userId, AiChatSendRequest request,
+                                     ChatEventSink sink, ChatExecutionControl control) {
         checkEnabled();
         validateRequest(request);
+        control.checkCancelled();
         QuestionContext question = requireQuestion(request.questionId());
         AiChatSession session = repository.getOrCreateSession(
                 userId, question.id(), properties.getRetentionDays());
-        return withLock(session.id(), () -> {
-            String disableReason = findDisableReason(userId, question.id());
-            if (StringUtils.hasText(disableReason)) {
-                repository.updateSessionAccess(session.id(), ChatSessionStatus.DISABLED.value(), disableReason);
-                throw ApiException.forbidden(disableReason);
-            }
-            checkInputSafety(userId, session.id(), request.message());
+        String disableReason = findDisableReason(userId, question.id());
+        if (StringUtils.hasText(disableReason)) {
+            repository.updateSessionAccess(session.id(), ChatSessionStatus.DISABLED.value(), disableReason);
+            throw ApiException.forbidden(disableReason);
+        }
+        checkInputSafety(userId, session.id(), request.message());
+
+        AiChatRepository.SessionClaim claim = repository.claimSession(
+                session.id(), request.clientMessageId(),
+                LocalDateTime.now().plus(properties.getTimeout()).plusSeconds(30),
+                properties.getRetentionDays());
+        if (claim.state() == AiChatRepository.ClaimState.COMPLETED) {
+            AiChatMessageView completed = toView(claim.completedMessage(), null);
+            emitCompleted(sink, session.id(), completed);
+            return completed;
+        }
+        if (claim.state() == AiChatRepository.ClaimState.BUSY) {
+            throw ApiException.tooManyRequests("当前会话已有回复正在生成，请等待完成");
+        }
+
+        control.register(session.id(), request.clientMessageId(), claim.requestToken());
+        try {
+            control.checkCancelled();
             List<AiChatMessage> history = repository.listRecentMessages(
                     session.id(), properties.getMaxHistoryMessages());
             long startedAt = System.currentTimeMillis();
             String traceId = UUID.randomUUID().toString();
             TutorAnswer answer = tutorAgent.answer(userId, session, question, request, history, sink);
+            control.checkCancelled();
+
+            disableReason = findDisableReason(userId, question.id());
+            if (StringUtils.hasText(disableReason)) {
+                repository.updateSessionAccess(session.id(), ChatSessionStatus.DISABLED.value(), disableReason);
+                throw ApiException.forbidden(disableReason);
+            }
+
             long duration = System.currentTimeMillis() - startedAt;
             String toolCalls = writeJson(answer.toolEvents());
-            AiChatMessage assistant = repository.saveRound(session.id(), request.resolvedMode(),
-                    request.message().trim(), answer.content(), toolCalls, properties.getRetentionDays(),
-                    new AiChatRepository.MessageMetadata(traceId, answer.modelName(), answer.promptVersion(),
-                            duration, answer.promptTokens(), answer.completionTokens()));
+            AiChatMessage assistant = repository.saveRoundIfCurrent(
+                            session.id(), request.clientMessageId(), claim.sessionVersion(), claim.requestToken(),
+                            request.resolvedMode(), request.message().trim(), answer.content(), toolCalls,
+                            properties.getRetentionDays(),
+                            new AiChatRepository.MessageMetadata(traceId, answer.modelName(), answer.promptVersion(),
+                                    duration, answer.promptTokens(), answer.completionTokens()))
+                    .orElseThrow(ChatExecutionCancelledException::new);
+            control.completed();
             AiChatMessageView view = toView(assistant, duration);
-            if (sink != null) {
-                sink.emit("meta", new AiChatMeta(Long.toString(session.id()), Long.toString(assistant.id()), assistant.mode()));
-                Map<String, Object> done = new LinkedHashMap<>();
-                done.put("messageId", view.id());
-                done.put("mode", view.mode());
-                done.put("content", view.content());
-                done.put("rawContent", view.rawContent());
-                done.put("finalContent", view.finalContent());
-                done.put("reasoningDurationMs", view.reasoningDurationMs());
-                done.put("traceId", view.traceId());
-                done.put("modelName", view.modelName());
-                done.put("promptVersion", view.promptVersion());
-                done.put("promptTokens", view.promptTokens());
-                done.put("completionTokens", view.completionTokens());
-                done.put("toolCalls", view.toolCalls());
-                sink.emit("done", done);
-            }
+            emitCompleted(sink, session.id(), view);
             return view;
-        });
+        } catch (RuntimeException exception) {
+            control.releaseClaim();
+            throw exception;
+        }
+    }
+
+    private void emitCompleted(ChatEventSink sink, long sessionId, AiChatMessageView view) {
+        if (sink == null) {
+            return;
+        }
+        sink.emit("meta", new AiChatMeta(Long.toString(sessionId), view.id(), view.mode()));
+        Map<String, Object> done = new LinkedHashMap<>();
+        done.put("messageId", view.id());
+        done.put("mode", view.mode());
+        done.put("content", view.content());
+        done.put("rawContent", view.rawContent());
+        done.put("finalContent", view.finalContent());
+        done.put("reasoningDurationMs", view.reasoningDurationMs());
+        done.put("traceId", view.traceId());
+        done.put("modelName", view.modelName());
+        done.put("promptVersion", view.promptVersion());
+        done.put("promptTokens", view.promptTokens());
+        done.put("completionTokens", view.completionTokens());
+        done.put("toolCalls", view.toolCalls());
+        sink.emit("done", done);
     }
 
     private void validateRequest(AiChatSendRequest request) {
@@ -268,24 +358,16 @@ public class AiChatService {
         }
     }
 
-    private <T> T withLock(long sessionId, SupplierWithException<T> action) {
-        ReentrantLock lock = sessionLocks[Math.floorMod(Long.hashCode(sessionId), sessionLocks.length)];
-        lock.lock();
-        try {
-            return action.get();
-        } finally {
-            lock.unlock();
-        }
-    }
-
-    private void safeSend(SseEmitter emitter, String eventName, Object data) {
+    private boolean safeSend(SseEmitter emitter, String eventName, Object data) {
         try {
             String json = objectMapper.writeValueAsString(data);
             synchronized (emitter) {
                 emitter.send(SseEmitter.event().name(eventName).data(json));
             }
+            return true;
         } catch (Exception exception) {
             log.debug("SSE connection is no longer writable: {}", exception.getMessage());
+            return false;
         }
     }
 
@@ -296,10 +378,13 @@ public class AiChatService {
         }
     }
 
-    private static void cancel(AtomicBoolean closed, Future<?>[] task) {
+    private static void cancel(AtomicBoolean closed, ChatExecutionControl control,
+                               AtomicReference<Future<?>> task) {
         closed.set(true);
-        if (task[0] != null && !task[0].isDone()) {
-            task[0].cancel(true);
+        control.cancel();
+        Future<?> future = task.get();
+        if (future != null && !future.isDone()) {
+            future.cancel(true);
         }
     }
 
@@ -318,16 +403,54 @@ public class AiChatService {
         }
     }
 
-    private static ReentrantLock[] createLocks(int size) {
-        ReentrantLock[] locks = new ReentrantLock[size];
-        for (int index = 0; index < size; index++) {
-            locks[index] = new ReentrantLock();
+    private final class ChatExecutionControl {
+
+        private final AtomicBoolean cancelled = new AtomicBoolean(false);
+        private final AtomicReference<ClaimHandle> claim = new AtomicReference<>();
+
+        private void register(long sessionId, String clientMessageId, long requestToken) {
+            ClaimHandle handle = new ClaimHandle(sessionId, clientMessageId, requestToken);
+            claim.set(handle);
+            if (cancelled.get()) {
+                if (claim.compareAndSet(handle, null)) {
+                    release(handle);
+                }
+                throw new ChatExecutionCancelledException();
+            }
         }
-        return locks;
+
+        private void completed() {
+            claim.set(null);
+        }
+
+        private boolean isCancelled() {
+            return cancelled.get() || Thread.currentThread().isInterrupted();
+        }
+
+        private void checkCancelled() {
+            if (isCancelled()) {
+                throw new ChatExecutionCancelledException();
+            }
+        }
+
+        private void cancel() {
+            cancelled.set(true);
+            releaseClaim();
+        }
+
+        private void releaseClaim() {
+            ClaimHandle handle = claim.getAndSet(null);
+            if (handle != null) {
+                release(handle);
+            }
+        }
+
+        private void release(ClaimHandle handle) {
+            repository.releaseSessionClaim(
+                    handle.sessionId(), handle.clientMessageId(), handle.requestToken());
+        }
     }
 
-    @FunctionalInterface
-    private interface SupplierWithException<T> {
-        T get();
+    private record ClaimHandle(long sessionId, String clientMessageId, long requestToken) {
     }
 }

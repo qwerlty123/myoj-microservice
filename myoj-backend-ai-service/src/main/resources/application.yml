@@ -74,7 +74,7 @@ myoj:
       stale-after: ${AI_AUTHORING_STALE_AFTER:3m}
       recovery-cron: ${AI_AUTHORING_RECOVERY_CRON:0 */1 * * * ?}
       page-size-limit: ${AI_AUTHORING_PAGE_SIZE_LIMIT:50}
-      graph-version: ${AI_AUTHORING_GRAPH_VERSION:authoring-v1}
+      graph-version: ${AI_AUTHORING_GRAPH_VERSION:authoring-v2-hitl}
       prompt-version: ${AI_AUTHORING_PROMPT_VERSION:authoring-v1}
       checkpoint:
         host: ${REDIS_HOST:127.0.0.1}
@@ -85,6 +85,10 @@ myoj:
       core-size: ${AI_AGENT_CORE_THREADS:2}
       max-size: ${AI_AGENT_MAX_THREADS:8}
       queue-capacity: ${AI_AGENT_QUEUE_CAPACITY:50}
+    chat-executor:
+      core-size: ${AI_CHAT_CORE_THREADS:8}
+      max-size: ${AI_CHAT_MAX_THREADS:8}
+      queue-capacity: ${AI_CHAT_QUEUE_CAPACITY:32}
     sandbox:
       url: ${CODESANDBOX_URL:http://localhost:8090/executeCode}
       secret-key: ${CODESANDBOX_SECRET_KEY:}

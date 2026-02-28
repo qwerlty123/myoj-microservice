@@ -2,6 +2,7 @@ package com.qwerlty.myojbackendaiservice.chat.tools;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.qwerlty.myojbackendaiservice.chat.agent.ChatExecutionCancelledException;
 import com.qwerlty.myojbackendaiservice.chat.agent.ChatEventSink;
 import com.qwerlty.myojbackendaiservice.chat.model.AiToolEvent;
 import org.springframework.ai.tool.annotation.Tool;
@@ -70,6 +71,9 @@ public final class TutorAgentTools {
     }
 
     private String execute(String toolName, String input) {
+        if (Thread.currentThread().isInterrupted() || sink != null && sink.isCancelled()) {
+            throw new ChatExecutionCancelledException();
+        }
         TutorToolResult result = toolService.execute(toolName, input, context);
         events.add(result.event());
         if (sink != null) {

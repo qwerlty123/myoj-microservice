@@ -16,7 +16,14 @@ public interface AuthoringDraftModel {
     record GenerationOutcome(
             AuthoringProblemDraft draft,
             String modelName,
-            String promptVersion
+            String promptVersion,
+            Integer promptTokens,
+            Integer completionTokens
     ) {
+        public GenerationOutcome(AuthoringProblemDraft draft,
+                                 String modelName,
+                                 String promptVersion) {
+            this(draft, modelName, promptVersion, null, null);
+        }
     }
 }

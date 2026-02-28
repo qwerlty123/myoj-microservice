@@ -70,7 +70,8 @@ class QuestionTutorAgentToolCallingTest {
                 7L,
                 new AiChatSession(11L, 7L, 1L, "agent", 1, null, null, null, null, null),
                 new QuestionContext(1L, "测试题", "题目内容", "数组", null, null, 1),
-                new AiChatSendRequest(1L, "agent", "帮我分析边界", "java", null, null, List.of()),
+                new AiChatSendRequest("tool-call-test", 1L, "agent", "帮我分析边界", "java",
+                        null, null, List.of()),
                 List.of(),
                 null);
 

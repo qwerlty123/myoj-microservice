@@ -1,4 +1,88 @@
-[
+{
+  "metadata": {
+    "schemaVersion": 2,
+    "graphVersion": "authoring-v2-hitl",
+    "promptVersion": "authoring-v1",
+    "language": "java"
+  },
+  "policy": {
+    "expectedOutcome": "生成通过确定性校验和 Java 沙箱的待审核草稿；只有管理员批准后才允许创建题目",
+    "allowedTools": ["code_sandbox", "publish_question_after_approval"],
+    "forbiddenTools": ["publish_question_without_approval"],
+    "expectedPaths": {
+      "draft": ["generate_draft", "validate_draft", "sandbox_verify", "prepare_review", "human_review"],
+      "approve": ["human_review", "publish_question"],
+      "reject": ["human_review", "reject_draft"]
+    },
+    "maxSteps": 18,
+    "maxModelCalls": 4,
+    "maxSandboxCalls": 4,
+    "safetyConstraints": [
+      "admin_only_review",
+      "no_unapproved_write",
+      "checkpoint_before_human_review",
+      "idempotent_question_publish",
+      "verified_judge_payload_immutable",
+      "no_prompt_or_code_in_trace"
+    ]
+  },
+  "releaseGates": {
+    "goldenSetSuccessRate": 0.90,
+    "expectedPathMatchRate": 1.0,
+    "maxForbiddenWrites": 0,
+    "maxUnapprovedWrites": 0,
+    "checkpointRecoveryRequired": true,
+    "maxDuplicateSideEffects": 0,
+    "maxModelCallsPerTask": 4,
+    "maxSandboxCallsPerTask": 4,
+    "maxP95RunLatencyMs": 120000,
+    "maxP95TotalTokens": 24000,
+    "maxLlmCallsMissingUsage": 0,
+    "maxToolErrorRate": 0.05
+  },
+  "workflowScenarios": [
+    {
+      "id": "approve-and-publish",
+      "input": {"reviewDecision": "APPROVE"},
+      "expectedOutcome": "管理员批准后创建一道题目并返回 publishedQuestionId",
+      "allowedTools": ["publish_question_after_approval"],
+      "forbiddenTools": ["publish_question_without_approval"],
+      "expectedNodes": ["human_review", "publish_question"],
+      "maxSteps": 2,
+      "safetyConstraints": ["admin_only_review", "no_unapproved_write", "idempotent_question_publish", "verified_judge_payload_immutable"]
+    },
+    {
+      "id": "reject-without-write",
+      "input": {"reviewDecision": "REJECT"},
+      "expectedOutcome": "任务进入 REJECTED，题目服务写操作调用数为零",
+      "allowedTools": [],
+      "forbiddenTools": ["publish_question_after_approval", "publish_question_without_approval"],
+      "expectedNodes": ["human_review", "reject_draft"],
+      "maxSteps": 2,
+      "safetyConstraints": ["admin_only_review", "no_unapproved_write"]
+    },
+    {
+      "id": "checkpoint-recovery",
+      "input": {"restartBeforeNode": "validate_draft"},
+      "expectedOutcome": "从 Redis checkpoint 恢复且 generate_draft 不重复执行",
+      "allowedTools": ["code_sandbox"],
+      "forbiddenTools": ["publish_question_without_approval"],
+      "expectedNodes": ["generate_draft", "validate_draft", "sandbox_verify", "prepare_review", "human_review"],
+      "maxSteps": 18,
+      "safetyConstraints": ["checkpoint_before_human_review", "no_duplicate_model_call", "no_unapproved_write"]
+    },
+    {
+      "id": "publish-replay",
+      "input": {"reviewDecision": "APPROVE", "replayCount": 2},
+      "expectedOutcome": "重放返回同一 publishedQuestionId，只创建一道题目",
+      "allowedTools": ["publish_question_after_approval"],
+      "forbiddenTools": ["publish_question_without_approval"],
+      "expectedNodes": ["human_review", "publish_question"],
+      "maxSteps": 4,
+      "safetyConstraints": ["idempotent_question_publish", "no_duplicate_side_effect"]
+    }
+  ],
+  "cases": [
   {"id":"array-sum","requirements":{"topic":"数组区间求和","difficulty":0,"tags":["数组"],"knowledgePoints":["前缀和"],"constraints":"输入规模覆盖空区间边界，答案使用 long"}},
   {"id":"two-sum","requirements":{"topic":"两数之和的下标","difficulty":0,"tags":["哈希表"],"knowledgePoints":["映射"],"constraints":"保证恰好一组答案，下标从 1 开始"}},
   {"id":"valid-parentheses","requirements":{"topic":"判断括号序列是否合法","difficulty":0,"tags":["栈"],"knowledgePoints":["括号匹配"],"constraints":"只包含三种括号，包含空串边界"}},
@@ -19,4 +103,5 @@
   {"id":"minimum-spanning-tree","requirements":{"topic":"连接所有城市的最小成本","difficulty":1,"tags":["图论"],"knowledgePoints":["最小生成树"],"constraints":"无法全部连接输出 -1，可能有重边"}},
   {"id":"digit-dp","requirements":{"topic":"区间内不含连续相同数字的整数个数","difficulty":2,"tags":["数位DP"],"knowledgePoints":["记忆化搜索"],"constraints":"左右端点不超过 10^18，包含数字 0"}},
   {"id":"max-flow","requirements":{"topic":"有向网络的最大流","difficulty":2,"tags":["网络流"],"knowledgePoints":["Dinic"],"constraints":"容量为非负整数，源点与汇点不同"}}
-]
+  ]
+}

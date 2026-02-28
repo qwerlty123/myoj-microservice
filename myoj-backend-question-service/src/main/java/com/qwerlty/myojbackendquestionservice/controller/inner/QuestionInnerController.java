@@ -9,9 +9,11 @@ import com.qwerlty.myojbackendmodel.model.dto.judge.JudgeTaskRetryRequest;
 import com.qwerlty.myojbackendmodel.model.entity.Question;
 import com.qwerlty.myojbackendmodel.model.entity.QuestionSubmit;
 import com.qwerlty.myojbackendquestionservice.service.QuestionService;
+import com.qwerlty.myojbackendquestionservice.service.AuthoringQuestionPublishService;
 import com.qwerlty.myojbackendquestionservice.service.JudgeTaskCoordinator;
 import com.qwerlty.myojbackendquestionservice.service.QuestionSubmitService;
 import com.qwerlty.myojbackendserviceclient.client.QuestionFeignClient;
+import com.qwerlty.myojbackendquestionservice.model.AuthoringPublishRequest;
 import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
@@ -32,6 +34,14 @@ public class QuestionInnerController implements QuestionFeignClient {
 
     @Resource
     private JudgeTaskCoordinator judgeTaskCoordinator;
+
+    @Resource
+    private AuthoringQuestionPublishService authoringQuestionPublishService;
+
+    @PostMapping("/authoring/publish")
+    public Long publishAuthoringQuestion(@RequestBody AuthoringPublishRequest request) {
+        return authoringQuestionPublishService.publish(request);
+    }
 
     /**
      * 根据查询条件批量获取题目提交列表

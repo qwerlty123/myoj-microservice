@@ -8,6 +8,9 @@ import jakarta.validation.constraints.Size;
 import java.util.List;
 
 public record AiChatSendRequest(
+        @NotBlank(message = "客户端消息编号不能为空")
+        @Size(max = 64, message = "客户端消息编号不能超过 64 个字符")
+        String clientMessageId,
         @NotNull(message = "题目编号不能为空")
         @Positive(message = "题目编号必须大于 0")
         Long questionId,

@@ -23,7 +23,9 @@ public class AuthoringTaskRepository {
     private static final String COLUMNS = """
             id, userId, sourceTaskId, idempotencyKey, taskType, requestJson, resultJson,
             status, stage, progress, repairCount, cancelRequested, errorCode, lastError,
-            modelName, promptVersion, graphVersion, startedTime, finishedTime, createTime, updateTime
+            modelName, promptVersion, graphVersion, reviewDecision, reviewDraftJson, reviewerId,
+            reviewComment, publishedQuestionId, reviewedTime,
+            startedTime, finishedTime, createTime, updateTime
             """;
 
     private final JdbcTemplate jdbcTemplate;
@@ -128,15 +130,69 @@ public class AuthoringTaskRepository {
                 """, modelName, promptVersion, LocalDateTime.now(), taskId);
     }
 
-    public void complete(long taskId, String resultJson, int repairCount) {
-        LocalDateTime now = LocalDateTime.now();
+    public void awaitReview(long taskId, String resultJson, int repairCount) {
         jdbcTemplate.update("""
                 UPDATE ai_authoring_task
-                SET status = 'REVIEW_REQUIRED', stage = 'COMPLETED', progress = 100,
+                SET status = 'REVIEW_REQUIRED', stage = 'AWAITING_REVIEW', progress = 95,
                     resultJson = ?, repairCount = ?, errorCode = NULL, lastError = NULL,
-                    finishedTime = ?, updateTime = ?
+                    finishedTime = NULL, updateTime = ?
                 WHERE id = ? AND status = 'RUNNING' AND cancelRequested = 0 AND isDelete = 0
-                """, resultJson, repairCount, now, now, taskId);
+                """, resultJson, repairCount, LocalDateTime.now(), taskId);
+    }
+
+    public boolean submitReview(long taskId,
+                                String decision,
+                                String reviewDraftJson,
+                                String resultJson,
+                                long reviewerId,
+                                String reviewComment) {
+        LocalDateTime now = LocalDateTime.now();
+        int updated = jdbcTemplate.update("""
+                UPDATE ai_authoring_task
+                SET status = 'RUNNING',
+                    stage = CASE WHEN ? = 'APPROVE' THEN 'PUBLISHING' ELSE 'AWAITING_REVIEW' END,
+                    progress = 96, reviewDecision = ?, reviewDraftJson = ?, resultJson = ?,
+                    reviewerId = ?, reviewComment = ?, reviewedTime = ?,
+                    errorCode = NULL, lastError = NULL, finishedTime = NULL, updateTime = ?
+                WHERE id = ? AND status = 'REVIEW_REQUIRED' AND cancelRequested = 0 AND isDelete = 0
+                """, decision, decision, reviewDraftJson, resultJson, reviewerId,
+                truncate(reviewComment, 1000), now, now, taskId);
+        return updated == 1;
+    }
+
+    public boolean markPublished(long taskId, long questionId) {
+        LocalDateTime now = LocalDateTime.now();
+        int updated = jdbcTemplate.update("""
+                UPDATE ai_authoring_task
+                SET status = 'PUBLISHED', stage = 'PUBLISHED', progress = 100,
+                    publishedQuestionId = ?, errorCode = NULL, lastError = NULL,
+                    finishedTime = ?, updateTime = ?
+                WHERE id = ? AND status = 'RUNNING' AND reviewDecision = 'APPROVE'
+                    AND cancelRequested = 0 AND isDelete = 0
+                """, questionId, now, now, taskId);
+        return updated == 1;
+    }
+
+    public boolean markRejected(long taskId) {
+        LocalDateTime now = LocalDateTime.now();
+        int updated = jdbcTemplate.update("""
+                UPDATE ai_authoring_task
+                SET status = 'REJECTED', stage = 'REJECTED', progress = 100,
+                    errorCode = NULL, lastError = NULL, finishedTime = ?, updateTime = ?
+                WHERE id = ? AND status = 'RUNNING' AND reviewDecision = 'REJECT'
+                    AND cancelRequested = 0 AND isDelete = 0
+                """, now, now, taskId);
+        return updated == 1;
+    }
+
+    public void returnToReview(long taskId, String errorCode, String lastError) {
+        jdbcTemplate.update("""
+                UPDATE ai_authoring_task
+                SET status = 'REVIEW_REQUIRED', stage = 'AWAITING_REVIEW', progress = 95,
+                    errorCode = ?, lastError = ?, finishedTime = NULL, updateTime = ?
+                WHERE id = ? AND status = 'RUNNING' AND reviewDecision IS NOT NULL
+                    AND cancelRequested = 0 AND isDelete = 0
+                """, errorCode, truncate(lastError, 1000), LocalDateTime.now(), taskId);
     }
 
     public void fail(long taskId, String errorCode, String lastError, int repairCount) {
@@ -202,6 +258,12 @@ public class AuthoringTaskRepository {
             rs.getString("modelName"),
             rs.getString("promptVersion"),
             rs.getString("graphVersion"),
+            rs.getString("reviewDecision"),
+            rs.getString("reviewDraftJson"),
+            nullableLong(rs.getObject("reviewerId")),
+            rs.getString("reviewComment"),
+            nullableLong(rs.getObject("publishedQuestionId")),
+            toLocalDateTime(rs.getTimestamp("reviewedTime")),
             toLocalDateTime(rs.getTimestamp("startedTime")),
             toLocalDateTime(rs.getTimestamp("finishedTime")),
             toLocalDateTime(rs.getTimestamp("createTime")),

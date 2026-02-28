@@ -172,6 +172,10 @@ create table if not exists ai_chat_session
     mode varchar(16) default 'normal' not null,
     status tinyint default 0 not null comment '0 active, 1 archived, 2 disabled',
     disableReason varchar(512) null,
+    version bigint default 0 not null,
+    activeRequestId varchar(64) null,
+    activeRequestToken bigint default 0 not null,
+    activeRequestExpireTime datetime null,
     lastMessageTime datetime default CURRENT_TIMESTAMP not null,
     expireTime datetime not null,
     createTime datetime default CURRENT_TIMESTAMP not null,
@@ -179,13 +183,15 @@ create table if not exists ai_chat_session
     isDelete tinyint default 0 not null,
     unique index uk_ai_chat_user_question (userId, questionId, isDelete),
     index idx_ai_chat_expire (status, expireTime),
-    index idx_ai_chat_question (questionId)
+    index idx_ai_chat_question (questionId),
+    index idx_ai_chat_active_request (activeRequestId, activeRequestExpireTime)
 ) comment 'AI question tutoring session' collate = utf8mb4_unicode_ci;
 
 create table if not exists ai_chat_message
 (
     id bigint auto_increment primary key,
     sessionId bigint not null,
+    clientMessageId varchar(64) null,
     role varchar(16) not null,
     mode varchar(16) default 'normal' not null,
     content longtext not null,
@@ -199,7 +205,8 @@ create table if not exists ai_chat_message
     completionTokens int null,
     createTime datetime default CURRENT_TIMESTAMP not null,
     isDelete tinyint default 0 not null,
-    index idx_ai_chat_message_session (sessionId, id)
+    index idx_ai_chat_message_session (sessionId, id),
+    index idx_ai_chat_client_message (sessionId, clientMessageId, role, isDelete)
 ) comment 'AI tutoring message history' collate = utf8mb4_unicode_ci;
 
 create table if not exists ai_prompt_config
@@ -295,6 +302,17 @@ create table if not exists ai_tool_call_log
     index idx_ai_tool_session (sessionId)
 ) comment 'AI Agent tool call audit log' collate = utf8mb4_unicode_ci;
 
+create table if not exists ai_tool_daily_quota
+(
+    userId bigint not null,
+    toolName varchar(64) not null,
+    usageDate date not null,
+    usedCount int default 0 not null,
+    createTime datetime default CURRENT_TIMESTAMP not null,
+    updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP,
+    primary key (userId, toolName, usageDate)
+) comment 'Atomic daily AI tool quota' collate = utf8mb4_unicode_ci;
+
 create table if not exists ai_authoring_task
 (
     id bigint auto_increment primary key,
@@ -314,6 +332,12 @@ create table if not exists ai_authoring_task
     modelName varchar(128) null,
     promptVersion varchar(64) null,
     graphVersion varchar(64) not null,
+    reviewDecision varchar(16) null,
+    reviewDraftJson longtext null,
+    reviewerId bigint null,
+    reviewComment varchar(1000) null,
+    publishedQuestionId bigint null,
+    reviewedTime datetime null,
     startedTime datetime null,
     finishedTime datetime null,
     createTime datetime default CURRENT_TIMESTAMP not null,
@@ -321,8 +345,47 @@ create table if not exists ai_authoring_task
     isDelete tinyint default 0 not null,
     unique index uk_ai_authoring_idempotency (userId, idempotencyKey, isDelete),
     index idx_ai_authoring_recovery (status, cancelRequested, updateTime),
-    index idx_ai_authoring_user (userId, taskType, id)
+    index idx_ai_authoring_user (userId, taskType, id),
+    index idx_ai_authoring_published_question (publishedQuestionId)
 ) comment 'Durable AI problem authoring task' collate = utf8mb4_unicode_ci;
+
+create table if not exists ai_question_publish
+(
+    idempotencyKey varchar(128) primary key,
+    sourceTaskId bigint not null,
+    reviewerId bigint not null,
+    payloadHash char(64) not null,
+    questionId bigint null,
+    createTime datetime default CURRENT_TIMESTAMP not null,
+    updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP,
+    unique index uk_ai_question_publish_task (sourceTaskId),
+    unique index uk_ai_question_publish_question (questionId)
+) comment 'Idempotent publication record for reviewed AI-authored questions'
+  collate = utf8mb4_unicode_ci;
+
+create table if not exists ai_authoring_trace_event
+(
+    id bigint auto_increment primary key,
+    traceId varchar(64) not null,
+    runId varchar(64) not null,
+    taskId bigint not null,
+    graphThreadId varchar(128) not null,
+    graphVersion varchar(64) not null,
+    eventType varchar(32) not null,
+    nodeId varchar(64) null,
+    fromNode varchar(64) null,
+    toNode varchar(64) null,
+    outcome varchar(32) null,
+    durationMs bigint null,
+    actorId bigint null,
+    detailJson varchar(2000) null,
+    createTime datetime default CURRENT_TIMESTAMP not null,
+    index idx_authoring_trace (traceId, id),
+    index idx_authoring_run (runId, id),
+    index idx_authoring_task_event (taskId, eventType, id),
+    index idx_authoring_trace_time (createTime, eventType, id)
+) comment 'Sanitized LangGraph authoring trace events'
+  collate = utf8mb4_unicode_ci;
 
 insert ignore into ai_prompt_config (scene, versionNo, promptContent, enabled, isActive)
 values ('normal', 1,

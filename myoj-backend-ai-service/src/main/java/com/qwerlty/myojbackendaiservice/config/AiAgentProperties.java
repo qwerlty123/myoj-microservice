@@ -14,6 +14,7 @@ public class AiAgentProperties {
     private int maxSteps = 10;
     private int memorySize = 16;
     private final Executor executor = new Executor();
+    private final Executor chatExecutor = new Executor(8, 8, 32);
     private final Chat chat = new Chat();
     private final Authoring authoring = new Authoring();
     private final Sandbox sandbox = new Sandbox();
@@ -56,6 +57,10 @@ public class AiAgentProperties {
         return executor;
     }
 
+    public Executor getChatExecutor() {
+        return chatExecutor;
+    }
+
     public Chat getChat() {
         return chat;
     }
@@ -80,6 +85,15 @@ public class AiAgentProperties {
         private int coreSize = 2;
         private int maxSize = 8;
         private int queueCapacity = 50;
+
+        public Executor() {
+        }
+
+        private Executor(int coreSize, int maxSize, int queueCapacity) {
+            this.coreSize = coreSize;
+            this.maxSize = maxSize;
+            this.queueCapacity = queueCapacity;
+        }
 
         public int getCoreSize() {
             return coreSize;
@@ -205,7 +219,7 @@ public class AiAgentProperties {
         private Duration staleAfter = Duration.ofMinutes(3);
         private String recoveryCron = "0 */1 * * * ?";
         private int pageSizeLimit = 50;
-        private String graphVersion = "authoring-v1";
+        private String graphVersion = "authoring-v2-hitl";
         private String promptVersion = "authoring-v1";
         private final RedisCheckpoint checkpoint = new RedisCheckpoint();
 

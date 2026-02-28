@@ -2,11 +2,13 @@ package com.qwerlty.myojbackendaiservice.authoring.graph;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qwerlty.myojbackendaiservice.authoring.api.ProblemDraftRequirements;
+import com.qwerlty.myojbackendaiservice.authoring.client.AuthoringQuestionPublisher;
 import com.qwerlty.myojbackendaiservice.authoring.model.AuthoringProblemDraft;
 import com.qwerlty.myojbackendaiservice.authoring.model.AuthoringStage;
 import com.qwerlty.myojbackendaiservice.authoring.model.AuthoringTask;
 import com.qwerlty.myojbackendaiservice.authoring.model.AuthoringTaskStatus;
 import com.qwerlty.myojbackendaiservice.authoring.repository.AuthoringTaskRepository;
+import com.qwerlty.myojbackendaiservice.authoring.repository.AuthoringTraceRecorder;
 import com.qwerlty.myojbackendaiservice.config.AiAgentProperties;
 import com.qwerlty.myojbackendaiservice.dto.JudgeCase;
 import com.qwerlty.myojbackendaiservice.observability.AiMetrics;
@@ -50,10 +52,12 @@ class QuestionAuthoringGraphRedisCheckpointTest {
         AuthoringTaskRepository repository = mock(AuthoringTaskRepository.class);
         AuthoringDraftModel model = mock(AuthoringDraftModel.class);
         AuthoringSandboxVerifier sandboxVerifier = mock(AuthoringSandboxVerifier.class);
+        AuthoringQuestionPublisher questionPublisher = mock(AuthoringQuestionPublisher.class);
         AuthoringDraftValidator crashingValidator = mock(AuthoringDraftValidator.class);
         AuthoringProblemDraft draft = validDraft();
         AuthoringTask task = task(objectMapper);
         AiMetrics metrics = new AiMetrics(new SimpleMeterRegistry());
+        AuthoringTraceRecorder trace = mock(AuthoringTraceRecorder.class);
 
         when(repository.isCancelRequested(anyLong())).thenReturn(false);
         when(model.generate(any())).thenReturn(
@@ -66,15 +70,15 @@ class QuestionAuthoringGraphRedisCheckpointTest {
         try {
             RedisSaver saver = RedisSaver.builder().redissonClient(firstClient).build();
             QuestionAuthoringGraph interruptedGraph = new QuestionAuthoringGraph(
-                    repository, model, crashingValidator, sandboxVerifier, properties,
-                    objectMapper, metrics, saver);
+                    repository, model, crashingValidator, sandboxVerifier, questionPublisher, properties,
+                    objectMapper, metrics, trace, saver);
 
             assertThatThrownBy(() -> interruptedGraph.execute(task))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("simulated process interruption");
             assertThat(interruptedGraph.hasCheckpoint(task.id())).isTrue();
             verify(model, times(1)).generate(any());
-            verify(repository, never()).complete(anyLong(), anyString(), org.mockito.ArgumentMatchers.anyInt());
+            verify(repository, never()).awaitReview(anyLong(), anyString(), org.mockito.ArgumentMatchers.anyInt());
         } finally {
             firstClient.shutdown();
         }
@@ -83,13 +87,65 @@ class QuestionAuthoringGraphRedisCheckpointTest {
         try {
             RedisSaver saver = RedisSaver.builder().redissonClient(recoveredClient).build();
             QuestionAuthoringGraph recoveredGraph = new QuestionAuthoringGraph(
-                    repository, model, new AuthoringDraftValidator(), sandboxVerifier, properties,
-                    objectMapper, metrics, saver);
+                    repository, model, new AuthoringDraftValidator(), sandboxVerifier, questionPublisher, properties,
+                    objectMapper, metrics, trace, saver);
 
             assertThat(recoveredGraph.hasCheckpoint(task.id())).isTrue();
             recoveredGraph.execute(task);
             verify(model, times(1)).generate(any());
-            verify(repository, times(1)).complete(anyLong(), anyString(), org.mockito.ArgumentMatchers.eq(0));
+            verify(repository, times(1)).awaitReview(anyLong(), anyString(), org.mockito.ArgumentMatchers.eq(0));
+            saver.cleanupAll();
+        } finally {
+            recoveredClient.shutdown();
+        }
+    }
+
+    @Test
+    void resumesHumanApprovalFromRedisInANewGraphInstanceAndPublishesOnce() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+        AiAgentProperties properties = new AiAgentProperties();
+        AuthoringTaskRepository repository = mock(AuthoringTaskRepository.class);
+        AuthoringDraftModel model = mock(AuthoringDraftModel.class);
+        AuthoringSandboxVerifier sandboxVerifier = mock(AuthoringSandboxVerifier.class);
+        AuthoringQuestionPublisher publisher = mock(AuthoringQuestionPublisher.class);
+        AuthoringTraceRecorder trace = mock(AuthoringTraceRecorder.class);
+        AuthoringProblemDraft draft = validDraft();
+        AuthoringTask task = task(objectMapper, 9002L);
+        AiMetrics metrics = new AiMetrics(new SimpleMeterRegistry());
+
+        when(repository.isCancelRequested(anyLong())).thenReturn(false);
+        when(repository.markPublished(9002L, 99002L)).thenReturn(true);
+        when(model.generate(any())).thenReturn(
+                new AuthoringDraftModel.GenerationOutcome(draft, "checkpoint-model", "authoring-v1"));
+        when(sandboxVerifier.verify(any())).thenReturn(
+                new AuthoringSandboxVerifier.SandboxVerification(true, List.of()));
+        when(publisher.publish(anyLong(), anyLong(), anyString(), any())).thenReturn(99002L);
+
+        RedissonClient firstClient = redisClient();
+        try {
+            QuestionAuthoringGraph graph = new QuestionAuthoringGraph(
+                    repository, model, new AuthoringDraftValidator(), sandboxVerifier, publisher, properties,
+                    objectMapper, metrics, trace,
+                    RedisSaver.builder().redissonClient(firstClient).build());
+            graph.execute(task);
+            verify(publisher, never()).publish(anyLong(), anyLong(), anyString(), any());
+        } finally {
+            firstClient.shutdown();
+        }
+
+        RedissonClient recoveredClient = redisClient();
+        try {
+            RedisSaver saver = RedisSaver.builder().redissonClient(recoveredClient).build();
+            QuestionAuthoringGraph recovered = new QuestionAuthoringGraph(
+                    repository, model, new AuthoringDraftValidator(), sandboxVerifier, publisher, properties,
+                    objectMapper, metrics, trace, saver);
+
+            recovered.resumeReview(reviewedTask(task, objectMapper.writeValueAsString(draft)));
+
+            verify(publisher, times(1)).publish(
+                    org.mockito.ArgumentMatchers.eq(9002L), org.mockito.ArgumentMatchers.eq(7L),
+                    anyString(), org.mockito.ArgumentMatchers.eq(draft));
+            verify(repository).markPublished(9002L, 99002L);
             saver.cleanupAll();
         } finally {
             recoveredClient.shutdown();
@@ -103,13 +159,28 @@ class QuestionAuthoringGraphRedisCheckpointTest {
     }
 
     private static AuthoringTask task(ObjectMapper objectMapper) throws Exception {
-        long taskId = 9001L;
+        return task(objectMapper, 9001L);
+    }
+
+    private static AuthoringTask task(ObjectMapper objectMapper, long taskId) throws Exception {
         String request = objectMapper.writeValueAsString(new ProblemDraftRequirements(
                 "数组求和", 0, List.of("数组"), List.of("模拟"), "生成可验证题目"));
         LocalDateTime now = LocalDateTime.now();
         return new AuthoringTask(taskId, 7L, null, "redis-checkpoint", "PROBLEM_DRAFT", request, null,
                 AuthoringTaskStatus.RUNNING, AuthoringStage.QUEUED, 1, 0, false,
-                null, null, null, "authoring-v1", "authoring-v1", now, null, now, now);
+                null, null, null, "authoring-v1", "authoring-v2-hitl", now, null, now, now);
+    }
+
+    private static AuthoringTask reviewedTask(AuthoringTask source, String draftJson) {
+        LocalDateTime now = LocalDateTime.now();
+        return new AuthoringTask(
+                source.id(), source.userId(), source.sourceTaskId(), source.idempotencyKey(), source.taskType(),
+                source.requestJson(), source.resultJson(), AuthoringTaskStatus.RUNNING,
+                AuthoringStage.PUBLISHING, 96, source.repairCount(), false,
+                null, null, source.modelName(), source.promptVersion(), source.graphVersion(),
+                "APPROVE", draftJson, 7L, "人工复核通过", null, now,
+                source.startedTime(), null, source.createTime(), now
+        );
     }
 
     private static AuthoringProblemDraft validDraft() {

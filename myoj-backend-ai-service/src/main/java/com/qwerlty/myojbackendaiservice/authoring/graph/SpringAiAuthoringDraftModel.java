@@ -7,7 +7,9 @@ import com.qwerlty.myojbackendaiservice.chat.repository.AiChatRepository;
 import com.qwerlty.myojbackendaiservice.config.AiAgentProperties;
 import com.qwerlty.myojbackendaiservice.observability.AiMetrics;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.client.ResponseEntity;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -77,18 +79,25 @@ public class SpringAiAuthoringDraftModel implements AuthoringDraftModel {
                 : generateMessage(requirements);
         long startedAt = System.currentTimeMillis();
         try {
-            AuthoringProblemDraft result = chatClient.prompt()
+            ResponseEntity<ChatResponse, AuthoringProblemDraft> response = chatClient.prompt()
                     .system(prompt.content())
                     .user(userMessage)
                     .options(options.build())
                     .call()
-                    .entity(AuthoringProblemDraft.class);
+                    .responseEntity(AuthoringProblemDraft.class);
+            AuthoringProblemDraft result = response.entity();
             if (result == null) {
                 throw new IllegalStateException("模型没有返回结构化题目草稿");
             }
             metrics.recordModelCall("authoring_" + action, "success",
                     System.currentTimeMillis() - startedAt);
-            return new GenerationOutcome(result, modelName, prompt.version());
+            return new GenerationOutcome(
+                    result,
+                    modelName,
+                    prompt.version(),
+                    promptTokens(response.response()),
+                    completionTokens(response.response())
+            );
         } catch (RuntimeException exception) {
             metrics.recordModelCall("authoring_" + action, "error",
                     System.currentTimeMillis() - startedAt);
@@ -130,5 +139,19 @@ public class SpringAiAuthoringDraftModel implements AuthoringDraftModel {
 
     private static String truncate(String value, int maxLength) {
         return value.length() <= maxLength ? value : value.substring(0, maxLength);
+    }
+
+    private static Integer promptTokens(ChatResponse response) {
+        if (response == null || response.getMetadata() == null
+                || response.getMetadata().getUsage() == null) return null;
+        Integer value = response.getMetadata().getUsage().getPromptTokens();
+        return value != null && value > 0 ? value : null;
+    }
+
+    private static Integer completionTokens(ChatResponse response) {
+        if (response == null || response.getMetadata() == null
+                || response.getMetadata().getUsage() == null) return null;
+        Integer value = response.getMetadata().getUsage().getCompletionTokens();
+        return value != null && value > 0 ? value : null;
     }
 }

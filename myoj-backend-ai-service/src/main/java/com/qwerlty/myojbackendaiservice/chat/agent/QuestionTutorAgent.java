@@ -86,6 +86,7 @@ public class QuestionTutorAgent {
                               AiChatSendRequest request,
                               List<AiChatMessage> history,
                               ChatEventSink sink) {
+        checkCancelled(sink);
         ChatMode mode = request.resolvedMode();
         AiChatRepository.PromptDefinition prompt = promptDefinition(mode);
         String modelName = repository.findActiveModelName().filter(StringUtils::hasText)
@@ -127,6 +128,7 @@ public class QuestionTutorAgent {
         conversation.add(new UserMessage(userContext(question, request, "")));
 
         for (int step = 1; step <= Math.max(1, properties.getAgentMaxSteps()); step++) {
+            checkCancelled(sink);
             Prompt prompt = new Prompt(conversation, options);
             ChatResponse response;
             long startedAt = System.currentTimeMillis();
@@ -136,12 +138,14 @@ public class QuestionTutorAgent {
                 metrics.recordModelCall("tutor_agent_step", "success",
                         System.currentTimeMillis() - startedAt);
             } catch (Exception exception) {
+                rethrowIfCancelled(exception, sink);
                 metrics.recordModelCall("tutor_agent_step", "error",
                         System.currentTimeMillis() - startedAt);
                 log.warn("AI tutor agent model call failed at step {} type={}: {}", step,
                         exception.getClass().getSimpleName(), concise(exception.getMessage()));
                 break;
             }
+            checkCancelled(sink);
             if (response == null || response.getResult() == null) {
                 break;
             }
@@ -160,6 +164,7 @@ public class QuestionTutorAgent {
                 ToolExecutionResult execution = toolCallingManager.executeToolCalls(prompt, response);
                 conversation = new ArrayList<>(execution.conversationHistory());
             } catch (Exception exception) {
+                rethrowIfCancelled(exception, sink);
                 log.warn("AI tutor tool execution failed at step {} type={}: {}", step,
                         exception.getClass().getSimpleName(), concise(exception.getMessage()));
                 break;
@@ -192,6 +197,7 @@ public class QuestionTutorAgent {
         Prompt prompt = new Prompt(messages, modelOptions(modelName));
         long startedAt = System.currentTimeMillis();
         try {
+            checkCancelled(sink);
             if (sink == null) {
                 ChatResponse response = chatClient.prompt(prompt).call().chatResponse();
                 usage.add(response);
@@ -203,6 +209,7 @@ public class QuestionTutorAgent {
             StringBuilder value = new StringBuilder();
             int[] streamedUsage = new int[2];
             chatClient.prompt(prompt).stream().chatResponse().doOnNext(response -> {
+                checkCancelled(sink);
                 observeUsage(response, streamedUsage);
                 String chunk = response == null || response.getResult() == null
                         ? "" : response.getResult().getOutput().getText();
@@ -211,11 +218,13 @@ public class QuestionTutorAgent {
                     sink.emit("delta", chunk);
                 }
             }).blockLast();
+            checkCancelled(sink);
             usage.add(streamedUsage[0], streamedUsage[1]);
             metrics.recordModelCall("tutor_final", "success",
                     System.currentTimeMillis() - startedAt);
             return value.toString();
         } catch (Exception exception) {
+            rethrowIfCancelled(exception, sink);
             metrics.recordModelCall("tutor_final", "error",
                     System.currentTimeMillis() - startedAt);
             log.warn("AI tutor final answer failed type={}: {}", exception.getClass().getSimpleName(),
@@ -301,6 +310,27 @@ public class QuestionTutorAgent {
     private static String concise(String value) {
         if (!StringUtils.hasText(value)) return "unknown";
         return value.length() <= 300 ? value : value.substring(0, 300);
+    }
+
+    private static void checkCancelled(ChatEventSink sink) {
+        if (Thread.currentThread().isInterrupted() || sink != null && sink.isCancelled()) {
+            throw new ChatExecutionCancelledException();
+        }
+    }
+
+    private static void rethrowIfCancelled(Throwable exception, ChatEventSink sink) {
+        Throwable current = exception;
+        while (current != null) {
+            if (current instanceof ChatExecutionCancelledException) {
+                throw new ChatExecutionCancelledException(exception);
+            }
+            if (current instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+                throw new ChatExecutionCancelledException(exception);
+            }
+            current = current.getCause();
+        }
+        checkCancelled(sink);
     }
 
     private static final class UsageCounter {

@@ -67,8 +67,7 @@ public class TutorToolService {
         if (!policy.enabled()) {
             return failed(toolName, "该工具当前已禁用", context);
         }
-        if (policy.dailyLimit() > 0
-                && repository.countToolCallsToday(context.userId(), toolName) >= policy.dailyLimit()) {
+        if (!repository.tryAcquireToolQuota(context.userId(), toolName, policy.dailyLimit())) {
             return failed(toolName, "今日调用次数已达上限", context);
         }
         try {
